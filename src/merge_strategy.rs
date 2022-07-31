@@ -13,13 +13,13 @@ pub trait MergeStrategy {
         RelativeTerrainMap<U, T>: SaveToImage;
 }
 
-pub fn apply_merge_strategy<U: RelativeTo + ConflictResolver, F: MergeStrategy, const T: usize>(
+pub fn apply_merge_strategy<U: RelativeTo + ConflictResolver, const T: usize>(
     coords: Vec2<i32>,
     plugin: &str,
     value: &str,
     old: OptionalTerrain<U, T>,
     new: OptionalTerrain<U, T>,
-    strategy: &F,
+    strategy: &impl MergeStrategy,
 ) -> OptionalTerrain<U, T>
 where
     RelativeTerrainMap<U, T>: SaveToImage,

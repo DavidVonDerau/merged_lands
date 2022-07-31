@@ -77,6 +77,12 @@ impl MergeStrategy for ResolveConflictStrategy {
             *has_difference.get_mut(coords) = diff != default();
         }
 
+        let merged = RelativeTerrainMap {
+            reference: lhs.reference,
+            relative,
+            has_difference,
+        };
+
         if num_minor_conflicts > 0 || num_major_conflicts > 0 {
             println!(
                 "\t\t{} Major Conflicts ({} Minor Conflicts)",
@@ -85,8 +91,8 @@ impl MergeStrategy for ResolveConflictStrategy {
 
             {
                 let img_name = format!(
-                    "Maps/{}_{}_{}_DIFF_{}_{}_{}.png",
-                    value, coords.x, coords.y, plugin, num_minor_conflicts, num_major_conflicts
+                    "Maps/{}_{}_DIFF_{}_{}_{}_{}.png",
+                    coords.x, coords.y, value, plugin, num_minor_conflicts, num_major_conflicts
                 );
 
                 let img = DynamicImage::from(diff_img);
@@ -94,20 +100,14 @@ impl MergeStrategy for ResolveConflictStrategy {
                     .save(img_name)
                     .unwrap();
             }
-        }
 
-        let merged = RelativeTerrainMap {
-            reference: lhs.reference,
-            relative,
-            has_difference,
-        };
-
-        {
-            let img_name = format!(
-                "Maps/{}_{}_{}_MERGED_{}_{}_{}.png",
-                value, coords.x, coords.y, plugin, num_minor_conflicts, num_major_conflicts
-            );
-            merged.save_to_image(&img_name);
+            {
+                let img_name = format!(
+                    "Maps/{}_{}_MERGED_{}_{}_{}_{}.png",
+                    coords.x, coords.y, value, plugin, num_minor_conflicts, num_major_conflicts
+                );
+                merged.save_to_image(&img_name);
+            }
         }
 
         merged
