@@ -1,4 +1,7 @@
-use crate::{ConflictResolver, OptionalTerrain, RelativeTerrainMap, RelativeTo, SaveToImage, Vec2};
+use crate::land::terrain_map::Vec2;
+use crate::merge::conflict::ConflictResolver;
+use crate::merge::relative_terrain_map::{OptionalTerrainMap, RelativeTerrainMap};
+use crate::merge::relative_to::RelativeTo;
 
 pub trait MergeStrategy {
     fn apply<U: RelativeTo + ConflictResolver, const T: usize>(
@@ -10,34 +13,34 @@ pub trait MergeStrategy {
         rhs: &RelativeTerrainMap<U, T>,
     ) -> RelativeTerrainMap<U, T>
     where
-        RelativeTerrainMap<U, T>: SaveToImage;
+        <U as RelativeTo>::Delta: ConflictResolver;
 }
 
 pub fn apply_merge_strategy<U: RelativeTo + ConflictResolver, const T: usize>(
     coords: Vec2<i32>,
     plugin: &str,
     value: &str,
-    old: OptionalTerrain<U, T>,
-    new: OptionalTerrain<U, T>,
+    old: Option<&RelativeTerrainMap<U, T>>,
+    new: Option<&RelativeTerrainMap<U, T>>,
     strategy: &impl MergeStrategy,
-) -> OptionalTerrain<U, T>
+) -> OptionalTerrainMap<U, T>
 where
-    RelativeTerrainMap<U, T>: SaveToImage,
+    <U as RelativeTo>::Delta: ConflictResolver,
 {
     if old.is_some() && new.is_some() {
         let merged = strategy.apply(
             coords,
             plugin,
             value,
-            old.as_ref().unwrap(),
-            new.as_ref().unwrap(),
+            old.as_ref().expect("safe"),
+            new.as_ref().expect("safe"),
         );
 
         Some(merged)
     } else if old.is_some() {
-        old
+        old.cloned()
     } else if new.is_some() {
-        new
+        new.cloned()
     } else {
         None
     }

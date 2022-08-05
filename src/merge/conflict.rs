@@ -1,4 +1,5 @@
-use crate::{RoundTo, Vec3};
+use crate::land::terrain_map::Vec3;
+use crate::merge::round_to::RoundTo;
 
 pub enum ConflictType<T> {
     Minor(T),

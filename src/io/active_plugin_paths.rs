@@ -1,36 +1,39 @@
+use filetime::FileTime;
+use log::warn;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 fn read_lines(filename: impl AsRef<Path>) -> io::Result<io::Lines<io::BufReader<File>>> {
     let file = File::open(filename)?;
     Ok(io::BufReader::new(file).lines())
 }
 
-fn is_esm(path: &Path) -> bool {
-    path.extension() //
+fn is_esm(path: &str) -> bool {
+    Path::new(path)
+        .extension()
         .map_or(false, |ext| ext.eq_ignore_ascii_case("esm"))
 }
 
-fn sort_plugins(plugin_list: &mut Vec<PathBuf>) {
-    /// Order by modified time, with ESMs given priority.
-    fn order(path: &Path) -> (bool, SystemTime) {
-        let is_esm = is_esm(path);
-        let mtime = path
+fn sort_plugins(data_files: &str, plugin_list: &mut [String]) {
+    let order = |plugin: &str| {
+        // Order by modified time, with ESMs given priority.
+        let is_esm = is_esm(plugin);
+        let file_path: PathBuf = [data_files, plugin].iter().collect();
+        let last_modified_time = file_path
             .metadata()
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or_else(|_| SystemTime::now());
-        (!is_esm, mtime)
-    }
+            .map(|metadata| FileTime::from_last_modification_time(&metadata))
+            .expect("file does not have a last modified time");
+        (!is_esm, last_modified_time)
+    };
 
     plugin_list.sort_by(|a, b| order(a).cmp(&order(b)));
 }
 
 pub struct ActivePluginPaths {
-    pub masters: Vec<PathBuf>,
-    pub plugins: Vec<PathBuf>,
+    pub masters: Vec<String>,
+    pub plugins: Vec<String>,
 }
 
 impl ActivePluginPaths {
@@ -53,15 +56,15 @@ impl ActivePluginPaths {
                         && line.chars().filter(|c| *c == '=').count() == 1;
                     if is_valid_line {
                         let plugin_name = line.split('=').last().unwrap().to_string();
-                        game_files.push(PathBuf::from(plugin_name));
+                        game_files.push(plugin_name);
                     } else {
-                        println!("Found junk in [Game Files] section: {}", line);
+                        warn!("Found junk in [Game Files] section: {}", line);
                     }
                 }
             }
         }
 
-        sort_plugins(&mut game_files);
+        sort_plugins("Data Files", &mut game_files);
 
         let mut masters = Vec::new();
         let mut plugins = Vec::new();

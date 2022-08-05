@@ -1,5 +1,8 @@
-use crate::grid_access::{GridAccessor2D, GridPosition2D, SquareGridIterator};
-use crate::{landscape_flags, TerrainMap};
+use crate::land::conversions::landscape_flags;
+use crate::land::grid_access::{GridAccessor2D, Index2D, SquareGridIterator};
+use crate::land::terrain_map::{TerrainMap, Vec3};
+use log::warn;
+use num_traits::Pow;
 use std::default::default;
 use tes3::esp::{Landscape, LandscapeFlags, VertexHeights};
 
@@ -61,12 +64,12 @@ fn calculate_height_map<const T: usize>(vertex_heights: &VertexHeights) -> Terra
 
     for y in 0..T {
         for x in 0..T {
-            let coords = GridPosition2D { x, y };
+            let coords = Index2D::new(x, y);
             height += vertex_heights.data.get(coords) as i32;
             *grid_height.get_mut(coords) = height;
         }
 
-        height = grid_height.get(GridPosition2D { x: 0, y });
+        height = grid_height.get(Index2D::new(0, y));
     }
 
     for coords in grid_height.iter_grid() {
@@ -76,13 +79,81 @@ fn calculate_height_map<const T: usize>(vertex_heights: &VertexHeights) -> Terra
     grid_height
 }
 
+pub fn calculate_vertex_normals_map<const T: usize>(
+    height_map: &TerrainMap<i32, T>,
+) -> TerrainMap<Vec3<i8>, T> {
+    fn fix_coords<const T: usize>(coords: Index2D) -> Index2D {
+        let x = if coords.x + 1 == T {
+            coords.x - 1
+        } else {
+            coords.x
+        };
+
+        let y = if coords.y + 1 == T {
+            coords.y - 1
+        } else {
+            coords.y
+        };
+
+        Index2D::new(x, y)
+    }
+
+    let mut terrain = [[default(); T]; T];
+
+    for coords in height_map.iter_grid() {
+        let fixed_coords = fix_coords::<T>(coords);
+
+        let coords_x1 = Index2D::new(fixed_coords.x + 1, fixed_coords.y);
+
+        let h = height_map.get(fixed_coords) as f32 / HEIGHT_MAP_SCALE_FACTOR_F32;
+        let x1 = height_map.get(coords_x1) as f32 / HEIGHT_MAP_SCALE_FACTOR_F32;
+        let v1 = Vec3 {
+            x: 128f32 / HEIGHT_MAP_SCALE_FACTOR_F32,
+            y: 0f32,
+            z: (x1 - h) as f32,
+        };
+
+        let coords_y1 = Index2D::new(fixed_coords.x, fixed_coords.y + 1);
+        let y1 = height_map.get(coords_y1) as f32 / HEIGHT_MAP_SCALE_FACTOR_F32;
+        let v2 = Vec3 {
+            x: 0f32,
+            y: 128f32 / HEIGHT_MAP_SCALE_FACTOR_F32,
+            z: (y1 - h) as f32,
+        };
+
+        let mut normal = Vec3 {
+            x: v1.y * v2.z - v1.z * v2.y,
+            y: v1.z * v2.x - v1.x * v2.z,
+            z: v1.x * v2.y - v1.y * v2.x,
+        };
+
+        let squared: f32 = normal.x.pow(2) + normal.y.pow(2) + normal.z.pow(2);
+        let hyp: f32 = squared.sqrt() / 127.0f32;
+
+        normal.x /= hyp;
+        normal.y /= hyp;
+        normal.z /= hyp;
+
+        *terrain.get_mut(coords) = Vec3::new(normal.x as i8, normal.y as i8, normal.z as i8);
+    }
+
+    terrain
+}
 pub fn try_calculate_height_map(land: &Landscape) -> Option<TerrainMap<i32, 65>> {
     let included_data = landscape_flags(land);
     if !included_data.contains(LandscapeFlags::USES_VERTEX_HEIGHTS_AND_NORMALS) {
         return None;
     }
 
-    let grid_height = calculate_height_map(land.vertex_heights.as_ref().unwrap());
+    let Some(grid_height) = land.vertex_heights.as_ref().map(calculate_height_map) else {
+        warn!(
+            "({:>4}, {:>4}) {:<15} | missing vertex_heights",
+            land.grid.0,
+            land.grid.1,
+            "height_map"
+        );
+        return None;
+    };
 
     // IMPORTANT(dvd): Sanity check that this conversion works.
     let vertex_heights_into = calculate_vertex_heights_tes3(&grid_height);
@@ -95,7 +166,7 @@ pub fn try_calculate_height_map(land: &Landscape) -> Option<TerrainMap<i32, 65>>
             rhs,
             "delta did not match at {:?} (possibly due to height? {} {})",
             coords,
-            land.vertex_heights.as_ref().unwrap().offset,
+            land.vertex_heights.as_ref().expect("safe").offset,
             vertex_heights_into.offset
         );
     }

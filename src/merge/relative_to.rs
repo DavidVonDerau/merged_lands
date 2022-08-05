@@ -1,8 +1,8 @@
-use crate::{ConflictResolver, Vec3};
+use crate::land::terrain_map::Vec3;
 use std::fmt::Debug;
 
 pub trait RelativeTo: Copy + Default + Eq + Debug + Sized + 'static {
-    type Delta: Copy + Default + Eq + Debug + Sized + ConflictResolver + 'static;
+    type Delta: Copy + Default + Eq + Debug + Sized + 'static;
 
     fn subtract(lhs: Self, rhs: Self) -> Self::Delta;
 
