@@ -2,7 +2,7 @@ use crate::land::conversions::landscape_flags;
 use crate::land::grid_access::{GridAccessor2D, Index2D, SquareGridIterator};
 use crate::land::terrain_map::{TerrainMap, Vec3};
 use log::warn;
-use num_traits::Pow;
+use owo_colors::OwoColorize;
 use std::default::default;
 use tes3::esp::{Landscape, LandscapeFlags, VertexHeights};
 
@@ -127,7 +127,7 @@ pub fn calculate_vertex_normals_map<const T: usize>(
             z: v1.x * v2.y - v1.y * v2.x,
         };
 
-        let squared: f32 = normal.x.pow(2) + normal.y.pow(2) + normal.z.pow(2);
+        let squared: f32 = normal.x.powi(2) + normal.y.powi(2) + normal.z.powi(2);
         let hyp: f32 = squared.sqrt() / 127.0f32;
 
         normal.x /= hyp;
@@ -146,12 +146,12 @@ pub fn try_calculate_height_map(land: &Landscape) -> Option<TerrainMap<i32, 65>>
     }
 
     let Some(grid_height) = land.vertex_heights.as_ref().map(calculate_height_map) else {
-        warn!(
+        warn!("{}", format!(
             "({:>4}, {:>4}) {:<15} | missing vertex_heights",
             land.grid.0,
             land.grid.1,
             "height_map"
-        );
+        ).yellow());
         return None;
     };
 

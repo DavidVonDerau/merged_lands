@@ -4,32 +4,40 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.64.0"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-mimalloc = { version = "0.1.29", default-features = false }
+# <uncategorized>
 serde = { version = "1.0.139", features = ["derive"] }
-bincode = "1.3.3"
-bitflags = "1.3.2"
-anymap = "0.12.1"
-static_assertions = "1.1.0"
-copyless = "0.1.5"
-byteorder = "1.4.3"
-image = "0.24.3"
-num-traits = "0.2.15"
-cismute = "0.1.2"
-anyhow = "1.0.58"
-itertools = "0.10.3"
-filetime = "0.2.17"
-simplelog = "0.12.0"
-log = "0.4.17"
 clap = "3.2.16"
 argfile = "0.1.4"
 wild = "2.0.4"
 shadow-rs = "0.16.1"
-owo-colors = "3.4.0"
 
+# Support for bitfields.
+bitflags = "1.3.2"
+
+# Utilities.
+itertools = "0.10.3" # collect_vec, sorted_by, sorted_by_key
+static_assertions = "1.1.0"
+mimalloc = { version = "0.1.29", default-features = false }
+
+# Error messages, logging, colored output.
+simplelog = "0.12.0"
+log = "0.4.17"
+anyhow = "1.0.58"
+owo-colors =  "3.4.0"
+
+# Used when parsing the Morrowind.ini file.
+regex = "1.6.0"
+
+# Needed for cross-platform file operations.
+filesize = "0.2.0"  # For byte size used in ESP dependencies.
+filetime = "0.2.17" # For last modified time used in sorting.
+
+# For producing images of terrain.
+image = "0.24.3"
+
+# Parsing ESPs.
 [dependencies.tes3]
 git = "https://github.com/Greatness7/tes3"
 default-features = false
-features = ["esp"]  # add "nif" only if you need it
+features = ["esp"]

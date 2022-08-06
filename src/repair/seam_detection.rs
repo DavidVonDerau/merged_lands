@@ -3,7 +3,7 @@ use crate::land::terrain_map::Vec2;
 use crate::merge::relative_terrain_map::RelativeTerrainMap;
 use crate::LandmassDiff;
 use itertools::Itertools;
-use log::warn;
+use log::debug;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
 
@@ -279,7 +279,7 @@ pub(crate) fn repair_landmass_seams(merged: &mut LandmassDiff) -> usize {
     }
 
     if num_seams_repaired > 0 {
-        warn!("{} Seams Repaired", num_seams_repaired);
+        debug!("Repaired {} seams", num_seams_repaired);
     }
 
     num_seams_repaired

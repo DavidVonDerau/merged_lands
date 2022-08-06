@@ -4,6 +4,7 @@ use crate::merge::conflict::{ConflictResolver, ConflictType};
 use crate::merge::merge_strategy::MergeStrategy;
 use crate::merge::relative_terrain_map::RelativeTerrainMap;
 use crate::merge::relative_to::RelativeTo;
+use crate::ParsedPlugin;
 use std::default::default;
 
 #[derive(Default)]
@@ -13,7 +14,7 @@ impl MergeStrategy for ResolveConflictStrategy {
     fn apply<U: RelativeTo, const T: usize>(
         &self,
         _coords: Vec2<i32>,
-        _plugin: &str,
+        _plugin: &ParsedPlugin,
         _value: &str,
         lhs: &RelativeTerrainMap<U, T>,
         rhs: &RelativeTerrainMap<U, T>,

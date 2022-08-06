@@ -4,33 +4,55 @@ use crate::land::terrain_map::{Vec2, Vec3};
 use crate::merge::conflict::{ConflictResolver, ConflictType};
 use crate::merge::relative_terrain_map::RelativeTerrainMap;
 use crate::merge::relative_to::RelativeTo;
-use crate::LandmassDiff;
+use crate::{LandmassDiff, ParsedPlugin};
+use anyhow::{anyhow, Context, Result};
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageBuffer, Luma, Pixel, Rgb};
-use log::{error, trace};
+use log::{error, trace, warn};
+use owo_colors::OwoColorize;
 use std::default::default;
 use std::ops::{Deref, DerefMut};
+use std::path::{Path, PathBuf};
 
 const DEFAULT_SCALE_FACTOR: usize = 4;
 
-fn save_resized_image<const T: usize, I>(img: I, file_name: &str, scale_factor: usize)
+const MERGED_LANDS_DIR: &str = "Merged Lands";
+
+fn save_resized_image<const T: usize, I>(img: I, file_name: &str, scale_factor: usize) -> Result<()>
 where
     DynamicImage: From<I>,
 {
+    let exists = Path::new(MERGED_LANDS_DIR)
+        .try_exists()
+        .with_context(|| anyhow!("Unable to find `{}` directory", MERGED_LANDS_DIR))?;
+
+    if !exists {
+        warn!(
+            "{} {}",
+            format!("Unable to save image file {}", file_name.bold()).yellow(),
+            format!(
+                "because the `{}` directory does not exist",
+                MERGED_LANDS_DIR
+            )
+            .yellow()
+        );
+
+        return Ok(());
+    }
+
+    let file_path: PathBuf = [MERGED_LANDS_DIR, file_name].iter().collect();
+
     assert!(scale_factor > 0, "scale_factor must be > 0");
-    match DynamicImage::from(img)
+    DynamicImage::from(img)
         .resize_exact(
             (T * scale_factor) as u32,
             (T * scale_factor) as u32,
             FilterType::Nearest,
         )
-        .save(&file_name)
-    {
-        Ok(_) => {}
-        Err(e) => {
-            error!("Unable to save file {} due to: {}", file_name, e)
-        }
-    };
+        .save(&file_path)
+        .with_context(|| anyhow!("Unable to save image file {}", file_name))?;
+
+    Ok(())
 }
 
 impl<P, Container> GridAccessor2D<P> for ImageBuffer<P, Container>
@@ -72,7 +94,9 @@ impl<const T: usize> SaveToImage for RelativeTerrainMap<Vec3<u8>, T> {
             *img.get_mut(coords) = Rgb::from([new.x, new.y, new.z]);
         }
 
-        save_resized_image::<T, _>(img, file_name, DEFAULT_SCALE_FACTOR);
+        save_resized_image::<T, _>(img, file_name, DEFAULT_SCALE_FACTOR)
+            .map_err(|e| error!("{}", e.bold().bright_red()))
+            .ok();
     }
 }
 
@@ -104,7 +128,9 @@ impl<const T: usize> SaveToImage for RelativeTerrainMap<u8, T> {
             *img.get_mut(coords) = Luma::from([(scaled * 255.) as u8]);
         }
 
-        save_resized_image::<T, _>(img, file_name, DEFAULT_SCALE_FACTOR);
+        save_resized_image::<T, _>(img, file_name, DEFAULT_SCALE_FACTOR)
+            .map_err(|e| error!("{}", e.bold().bright_red()))
+            .ok();
     }
 }
 
@@ -129,13 +155,15 @@ impl<const T: usize> SaveToImage for RelativeTerrainMap<i32, T> {
             }
         }
 
-        save_resized_image::<T, _>(img, file_name, DEFAULT_SCALE_FACTOR);
+        save_resized_image::<T, _>(img, file_name, DEFAULT_SCALE_FACTOR)
+            .map_err(|e| error!("{}", e.bold().bright_red()))
+            .ok();
     }
 }
 
 pub fn save_image<U: RelativeTo + ConflictResolver, const T: usize>(
     coords: Vec2<i32>,
-    plugin: &str,
+    plugin: &ParsedPlugin,
     value: &str,
     lhs: Option<&RelativeTerrainMap<U, T>>,
     rhs: Option<&RelativeTerrainMap<U, T>>,
@@ -200,7 +228,7 @@ pub fn save_image<U: RelativeTo + ConflictResolver, const T: usize>(
     }
 
     // TODO(dvd): Read thresholds from config.
-    let minor_conflict_threshold = (T * T) as f32 * 0.01;
+    let minor_conflict_threshold = (T * T) as f32 * 0.02;
     let major_conflict_threshold = (T * T) as f32 * 0.001;
 
     let mut should_skip = num_minor_conflicts < minor_conflict_threshold as usize
@@ -216,10 +244,10 @@ pub fn save_image<U: RelativeTo + ConflictResolver, const T: usize>(
         coords.x,
         coords.y,
         value,
-        plugin,
+        plugin.name,
         num_major_conflicts,
         num_minor_conflicts,
-        if should_skip { "" } else { " *" }
+        if should_skip { "" } else { " *" }.bold().bright_red()
     );
 
     if should_skip {
@@ -228,44 +256,50 @@ pub fn save_image<U: RelativeTo + ConflictResolver, const T: usize>(
 
     {
         let file_name = format!(
-            "Maps/{}_{}_{}_DIFF_{}.png",
-            value, coords.x, coords.y, plugin,
+            "{}_{}_{}_DIFF_{}.png",
+            value, coords.x, coords.y, plugin.name,
         );
 
-        save_resized_image::<T, _>(diff_img, &file_name, DEFAULT_SCALE_FACTOR);
+        save_resized_image::<T, _>(diff_img, &file_name, DEFAULT_SCALE_FACTOR)
+            .map_err(|e| error!("{}", e.bold().bright_red()))
+            .ok();
     }
 
     {
-        let img_name = format!("Maps/{}_{}_{}_MERGED.png", value, coords.x, coords.y);
+        let img_name = format!("{}_{}_{}_MERGED.png", value, coords.x, coords.y);
         lhs.save_to_image(&img_name);
     }
 }
 
-fn save_landscape_images(plugin_name: &str, reference: &LandscapeDiff, plugin: &LandscapeDiff) {
+fn save_landscape_images(
+    parsed_plugin: &ParsedPlugin,
+    reference: &LandscapeDiff,
+    plugin: &LandscapeDiff,
+) {
     save_image(
         reference.coords,
-        plugin_name,
+        parsed_plugin,
         "height_map",
         reference.height_map.as_ref(),
         plugin.height_map.as_ref(),
     );
     save_image(
         reference.coords,
-        plugin_name,
+        parsed_plugin,
         "vertex_normals",
         reference.vertex_normals.as_ref(),
         plugin.vertex_normals.as_ref(),
     );
     save_image(
         reference.coords,
-        plugin_name,
+        parsed_plugin,
         "world_map_data",
         reference.world_map_data.as_ref(),
         plugin.world_map_data.as_ref(),
     );
     save_image(
         reference.coords,
-        plugin_name,
+        parsed_plugin,
         "vertex_colors",
         reference.vertex_colors.as_ref(),
         plugin.vertex_colors.as_ref(),

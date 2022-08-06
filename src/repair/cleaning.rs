@@ -1,10 +1,10 @@
-use crate::io::active_plugin_paths::ActivePluginPaths;
-use crate::io::read_plugin::parse_records;
+use crate::io::parsed_plugins::ParsedPlugins;
 use crate::land::grid_access::SquareGridIterator;
 use crate::land::textures::{KnownTextures, RemappedTextures};
 use crate::repair::seam_detection::repair_landmass_seams;
-use crate::LandmassDiff;
+use crate::{LandmassDiff, ParsedPlugin};
 use log::trace;
+use std::sync::Arc;
 use tes3::esp::LandscapeTexture;
 
 pub fn clean_landmass_diff(landmass: &mut LandmassDiff) {
@@ -22,7 +22,7 @@ pub fn clean_landmass_diff(landmass: &mut LandmassDiff) {
         }
     }
 
-    trace!("Removing {} unmodified LAND records.", unmodified.len());
+    trace!("Removing {} unmodified LAND records", unmodified.len());
 
     for coords in unmodified {
         landmass.land.remove(&coords);
@@ -30,7 +30,7 @@ pub fn clean_landmass_diff(landmass: &mut LandmassDiff) {
 }
 
 pub fn clean_known_textures(
-    active_plugin_paths: &ActivePluginPaths,
+    parsed_plugins: &ParsedPlugins,
     landmass: &LandmassDiff,
     known_textures: &mut KnownTextures,
 ) -> RemappedTextures {
@@ -39,20 +39,19 @@ pub fn clean_known_textures(
         "exceeded maximum number of textures"
     );
 
-    fn update_known_textures(path: &str, known_textures: &mut KnownTextures) {
-        let records = parse_records(path).expect("safe");
-        for texture in records.objects_of_type::<LandscapeTexture>() {
-            known_textures.update_texture(texture);
+    fn update_known_textures(plugin: &Arc<ParsedPlugin>, known_textures: &mut KnownTextures) {
+        for texture in plugin.records.objects_of_type::<LandscapeTexture>() {
+            known_textures.update_texture(plugin, texture);
         }
     }
 
     // Make sure all LTEX records have the correct filenames.
 
-    for master in active_plugin_paths.masters.iter() {
+    for master in parsed_plugins.masters.iter() {
         update_known_textures(master, known_textures);
     }
 
-    for plugin in active_plugin_paths.masters.iter() {
+    for plugin in parsed_plugins.masters.iter() {
         update_known_textures(plugin, known_textures);
     }
 
@@ -77,8 +76,8 @@ pub fn clean_known_textures(
     let remapped_textures = RemappedTextures::from(&used_ids);
     let num_removed_ids = known_textures.remove_unused(&remapped_textures);
 
-    trace!("Removing {} unused LTEX records.", num_removed_ids);
-    trace!("Remapping {} LTEX records.", known_textures.len());
+    trace!("Removing {} unused LTEX records", num_removed_ids);
+    trace!("Remapping {} LTEX records", known_textures.len());
 
     remapped_textures
 }

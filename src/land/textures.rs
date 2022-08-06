@@ -1,9 +1,10 @@
+use crate::ParsedPlugin;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::default::default;
-use tes3::esp::LandscapeTexture;
+use std::sync::Arc;
+use tes3::esp::{LandscapeTexture, ObjectFlags};
 
-// TODO(dvd): These textures should track which plugin they came from.
 pub struct RemappedTextures {
     inner: HashMap<u16, u16>,
 }
@@ -55,8 +56,27 @@ impl RemappedTextures {
     }
 }
 
+pub struct KnownTexture {
+    inner: LandscapeTexture,
+    pub plugin: Arc<ParsedPlugin>,
+}
+
+impl KnownTexture {
+    pub fn id(&self) -> &String {
+        &self.inner.id
+    }
+
+    pub fn index(&self) -> u16 {
+        texture_index(&self.inner)
+    }
+
+    pub fn clone_landscape_texture(&self) -> LandscapeTexture {
+        self.inner.clone()
+    }
+}
+
 pub struct KnownTextures {
-    inner: HashMap<String, LandscapeTexture>,
+    inner: HashMap<String, KnownTexture>,
 }
 
 fn texture_index(texture: &LandscapeTexture) -> u16 {
@@ -72,27 +92,31 @@ impl KnownTextures {
         Self { inner: default() }
     }
 
-    pub fn sorted(&self) -> impl Iterator<Item = &LandscapeTexture> + '_ {
+    pub fn sorted(&self) -> impl Iterator<Item = &KnownTexture> + '_ {
         self.inner
             .values()
-            .sorted_by(|a, b| texture_index(a).cmp(&texture_index(b)))
+            .sorted_by(|a, b| a.index().cmp(&b.index()))
     }
 
-    pub fn update_texture(&mut self, texture: &LandscapeTexture) {
+    pub fn update_texture(&mut self, plugin: &Arc<ParsedPlugin>, texture: &LandscapeTexture) {
         let known_texture = self.inner.get_mut(&texture.id).expect("unknown texture ID");
         if let Some(texture) = &texture.texture {
-            known_texture.texture = Some(texture.into());
+            known_texture.inner.texture = Some(texture.into());
+            known_texture.plugin = plugin.clone();
         }
     }
 
-    pub fn add_texture(&mut self, texture: &LandscapeTexture) -> (u16, u16) {
+    pub fn add_texture(
+        &mut self,
+        plugin: &Arc<ParsedPlugin>,
+        texture: &LandscapeTexture,
+    ) -> (u16, u16) {
         let old_index = texture_index(texture);
 
         let new_index = if self.inner.contains_key(&texture.id) {
-            let texture = self.inner.get(&texture.id).expect("safe");
-            texture_index(texture)
+            self.inner.get(&texture.id).expect("safe").index()
         } else {
-            self.add_next_texture(texture)
+            self.add_next_texture(plugin, texture)
         };
 
         (old_index, new_index)
@@ -100,18 +124,19 @@ impl KnownTextures {
 
     pub fn add_remapped_texture(
         &mut self,
+        plugin: &Arc<ParsedPlugin>,
         texture: &LandscapeTexture,
         remapped_textures: &mut RemappedTextures,
     ) {
-        let (old_id, new_id) = self.add_texture(texture);
+        let (old_id, new_id) = self.add_texture(plugin, texture);
         remapped_textures.inner.insert(old_id, new_id);
     }
 
     pub fn remove_unused(&mut self, remapped_textures: &RemappedTextures) -> usize {
         let mut unused_ids = Vec::new();
         for (id, texture) in self.inner.iter_mut() {
-            if let Some(new_idx) = remapped_textures.try_remapped_index(texture_index(texture)) {
-                texture.index = Some(new_idx.into());
+            if let Some(new_idx) = remapped_textures.try_remapped_index(texture.index()) {
+                texture.inner.index = Some(new_idx.into());
             } else {
                 unused_ids.push(id.clone());
             }
@@ -136,13 +161,24 @@ impl KnownTextures {
         self.len().try_into().expect("safe")
     }
 
-    fn add_next_texture(&mut self, texture: &LandscapeTexture) -> u16 {
+    fn add_next_texture(&mut self, plugin: &Arc<ParsedPlugin>, texture: &LandscapeTexture) -> u16 {
         let next_index = self.next_texture_index();
 
-        let mut new_texture = texture.clone();
-        new_texture.index = Some(next_index.into());
+        let mut inner = texture.clone();
 
-        self.inner.insert(texture.id.clone(), new_texture);
+        assert!(
+            !inner.flags.contains(ObjectFlags::DELETED),
+            "tried to add deleted LTEX"
+        );
+
+        inner.index = Some(next_index.into());
+
+        let known_texture = KnownTexture {
+            inner,
+            plugin: plugin.clone(),
+        };
+
+        self.inner.insert(texture.id.clone(), known_texture);
         next_index
     }
 }

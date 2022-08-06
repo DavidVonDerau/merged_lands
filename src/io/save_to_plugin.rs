@@ -1,12 +1,17 @@
+use crate::io::parsed_plugins::sort_plugins;
 use crate::land::conversions::convert_terrain_map;
 use crate::land::height_map::calculate_vertex_heights_tes3;
 use crate::land::landscape_diff::LandscapeDiff;
 use crate::land::terrain_map::Vec3;
 use crate::land::textures::{KnownTextures, RemappedTextures};
 use crate::merge::relative_terrain_map::{recompute_vertex_normals, DefaultRelativeTerrainMap};
-use crate::{Landmass, LandmassDiff};
+use crate::{Landmass, LandmassDiff, ParsedPlugins};
+use anyhow::{anyhow, Context, Result};
+use filesize::file_real_size;
 use filetime::FileTime;
-use log::{error, trace};
+use itertools::Itertools;
+use log::{debug, trace};
+use std::collections::HashSet;
 use std::default::default;
 use std::path::PathBuf;
 use tes3::esp::{
@@ -30,7 +35,7 @@ fn convert_landscape_diff_to_landscape(
             "({:>4}, {:>4}) | {:<50} | {:?}",
             landscape.coords.x,
             landscape.coords.y,
-            plugin,
+            plugin.name,
             modified_data
         );
     }
@@ -91,20 +96,37 @@ pub fn convert_landmass_diff_to_landmass(
     landmass: &LandmassDiff,
     remapped_textures: &RemappedTextures,
 ) -> Landmass {
-    let mut new_landmass = Landmass::new(landmass.plugin.clone(), landmass.data.clone());
+    let mut new_landmass = Landmass::new(landmass.plugin.clone());
 
     for (coords, land) in landmass.iter_land() {
         new_landmass.land.insert(
             *coords,
             convert_landscape_diff_to_landscape(land, remapped_textures),
         );
+        new_landmass
+            .plugins
+            .insert(*coords, land.plugins.last().expect("safe").0.clone());
     }
 
     new_landmass
 }
 
-pub fn save_plugin(name: &str, landmass: &Landmass, known_textures: &KnownTextures) {
-    let merged_filepath = PathBuf::from(format!("Data Files/{}.esp", name));
+fn to_master_record(data_files: &str, name: String) -> (String, u64) {
+    let merged_filepath: PathBuf = [data_files, &name].iter().collect();
+    let file_size = file_real_size(merged_filepath).unwrap_or(0);
+    (name, file_size)
+}
+
+pub fn save_plugin(
+    data_files: &str,
+    name: &str,
+    landmass: &Landmass,
+    known_textures: &KnownTextures,
+) -> Result<()> {
+    ParsedPlugins::check_data_files(data_files)
+        .with_context(|| anyhow!("Unable to save file {}", name))?;
+
+    let merged_filepath: PathBuf = [data_files, name].iter().collect();
     let last_modified_time = merged_filepath
         .metadata()
         .map(|metadata| FileTime::from_last_modification_time(&metadata))
@@ -112,41 +134,79 @@ pub fn save_plugin(name: &str, landmass: &Landmass, known_textures: &KnownTextur
 
     let mut plugin = Plugin::new();
 
+    debug!("Determining plugin dependencies");
+
+    let masters = {
+        let mut dependencies = HashSet::new();
+
+        // Add plugins that contribute textures.
+        for texture in known_textures.sorted() {
+            dependencies.insert(&*texture.plugin);
+        }
+
+        // Add plugins used for the land.
+        for plugin in landmass.plugins.values() {
+            dependencies.insert(plugin);
+        }
+
+        let mut masters = dependencies
+            .drain()
+            .map(|plugin| plugin.name.to_string())
+            .collect_vec();
+
+        sort_plugins(data_files, &mut masters)
+            .with_context(|| anyhow!("Unknown load order for {} dependencies", name))?;
+
+        Some(
+            masters
+                .into_iter()
+                .map(|plugin| to_master_record(data_files, plugin))
+                .collect_vec(),
+        )
+    };
+
+    for (idx, master) in masters.as_ref().expect("safe").iter().enumerate() {
+        trace!("Master  | {:>4} | {:<50} | {:>10}", idx, master.0, master.1);
+    }
+
     let header = Header {
         author: FixedString("Merged Lands by DVD".to_string()),
         description: FixedString(
             "Merges landscape changes inside of cells. Place at end of load order.".to_string(),
         ),
-        // TODO(dvd): Create masters from ESMs + ESPs that contributed modified LAND or LTEX records.
+        masters,
         ..default()
     };
     plugin.objects.push(TES3Object::Header(header));
 
-    for texture in known_textures.sorted() {
-        plugin
-            .objects
-            .push(TES3Object::LandscapeTexture(texture.clone()));
+    debug!("Saving {} LTEX records", known_textures.len());
+    for known_texture in known_textures.sorted() {
+        trace!(
+            "Texture | {:>4} | {:<30} | {}",
+            known_texture.index(),
+            known_texture.id(),
+            known_texture.plugin.name
+        );
+        plugin.objects.push(TES3Object::LandscapeTexture(
+            known_texture.clone_landscape_texture(),
+        ));
     }
 
+    debug!("Saving {} LAND records", landmass.land.len());
     for land in landmass.land.values() {
         plugin.objects.push(TES3Object::Landscape(land.clone()));
     }
 
     // Save the file & set the last modified time.
-    match plugin.save_path(&merged_filepath) {
-        Ok(_) => match filetime::set_file_mtime(merged_filepath, last_modified_time) {
-            Ok(_) => {}
-            Err(e) => {
-                error!(
-                    "Unable to set last modified date on plugin {} due to: {}",
-                    name, e
-                )
-            }
-        },
-        Err(e) => {
-            error!("Unable to save plugin {} due to: {}", name, e)
-        }
-    }
+
+    plugin
+        .save_path(&merged_filepath)
+        .with_context(|| anyhow!("Unable to save plugin {}", name))?;
+
+    filetime::set_file_mtime(merged_filepath, last_modified_time)
+        .with_context(|| anyhow!("Unable to set last modified date on plugin {}", name))?;
 
     // TODO(dvd): Save the TOML file.
+
+    Ok(())
 }

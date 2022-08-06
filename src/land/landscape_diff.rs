@@ -6,7 +6,9 @@ use crate::land::height_map::try_calculate_height_map;
 use crate::land::terrain_map::{LandData, TerrainMap, Vec2, Vec3};
 use crate::merge::relative_terrain_map::{IsModified, OptionalTerrainMap, RelativeTerrainMap};
 use crate::merge::relative_to::RelativeTo;
+use crate::ParsedPlugin;
 use std::default::default;
+use std::sync::Arc;
 use tes3::esp::{Landscape, LandscapeFlags, ObjectFlags};
 
 #[derive(Clone)]
@@ -18,7 +20,7 @@ pub struct LandscapeDiff {
     pub world_map_data: OptionalTerrainMap<u8, 9>,
     pub vertex_colors: OptionalTerrainMap<Vec3<u8>, 65>,
     pub texture_indices: OptionalTerrainMap<u16, 16>,
-    pub plugins: Vec<(String, LandData)>,
+    pub plugins: Vec<(Arc<ParsedPlugin>, LandData)>,
 }
 
 impl LandscapeDiff {
@@ -56,7 +58,11 @@ impl LandscapeDiff {
         modified
     }
 
-    pub fn from_reference(plugin: &str, land: &Landscape, allowed_data: LandData) -> Self {
+    pub fn from_reference(
+        plugin: Arc<ParsedPlugin>,
+        land: &Landscape,
+        allowed_data: LandData,
+    ) -> Self {
         let included_data = landscape_flags(land);
 
         let height_map = Self::calculate_reference(
@@ -97,7 +103,7 @@ impl LandscapeDiff {
             world_map_data,
             vertex_colors,
             texture_indices,
-            plugins: vec![(plugin.to_string(), LandData::default())],
+            plugins: vec![(plugin, LandData::default())],
         }
     }
 
