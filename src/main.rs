@@ -4,12 +4,14 @@
 #![feature(try_blocks)]
 #![feature(anonymous_lifetime_in_impl_trait)]
 #![feature(map_many_mut)]
+#![feature(const_for)]
 
 mod io;
 mod land;
 mod merge;
 mod repair;
 
+use crate::io::meta_schema::MetaType;
 use crate::io::parsed_plugins::{ParsedPlugin, ParsedPlugins};
 use crate::io::save_to_image::save_landmass_images;
 use crate::io::save_to_plugin::{convert_landmass_diff_to_landmass, save_plugin};
@@ -17,26 +19,26 @@ use crate::land::conversions::{coordinates, landscape_flags};
 use crate::land::landscape_diff::LandscapeDiff;
 use crate::land::terrain_map::{LandData, Vec2};
 use crate::land::textures::{KnownTextures, RemappedTextures};
+use crate::merge::cells::merge_cells;
 use crate::merge::merge_strategy::apply_merge_strategy;
-use crate::merge::overwrite_strategy::OverwriteStrategy;
 use crate::merge::relative_terrain_map::{IsModified, RelativeTerrainMap};
-use crate::merge::resolve_conflict_strategy::ResolveConflictStrategy;
 use crate::repair::cleaning::{clean_known_textures, clean_landmass_diff};
+use crate::repair::debugging::add_debug_vertex_colors_to_landmass;
 use crate::repair::seam_detection::repair_landmass_seams;
-
 use anyhow::Result;
 use clap::Command;
+use hashbrown::{HashMap, HashSet};
 use itertools::Itertools;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use mimalloc::MiMalloc;
 use owo_colors::OwoColorize;
 use simplelog::{
     ColorChoice, CombinedLogger, ConfigBuilder, LevelFilter, LevelPadding, TermLogger,
     TerminalMode, WriteLogger,
 };
-use std::collections::{HashMap, HashSet};
-use std::default::default;
 use std::fs::File;
+use std::io::Read;
+use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
 use std::time::Instant;
@@ -45,6 +47,7 @@ use tes3::esp::{Landscape, LandscapeFlags, LandscapeTexture, ObjectFlags};
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+/// A [Landmass] represents a collection of [Landscape] and the associated [ParsedPlugin].
 pub struct Landmass {
     plugin: Arc<ParsedPlugin>,
     land: HashMap<Vec2<i32>, Landscape>,
@@ -59,8 +62,19 @@ impl Landmass {
             plugins: HashMap::new(),
         }
     }
+
+    fn insert_land(&mut self, coords: Vec2<i32>, plugin: &Arc<ParsedPlugin>, land: &Landscape) {
+        self.plugins.insert(coords, plugin.clone());
+        self.land.insert(coords, land.clone());
+    }
+
+    /// Returns an [Iterator] over the [Landscape] ordered by `x` and `y` coordinates.
+    fn sorted(&self) -> impl Iterator<Item = (&Vec2<i32>, &Landscape)> {
+        self.land.iter().sorted_by_key(|f| (f.0.x, f.0.y))
+    }
 }
 
+/// A [LandmassDiff] represents a collection of [LandscapeDiff] and the associated [ParsedPlugin].
 pub struct LandmassDiff {
     plugin: Arc<ParsedPlugin>,
     land: HashMap<Vec2<i32>, LandscapeDiff>,
@@ -76,21 +90,27 @@ impl LandmassDiff {
         }
     }
 
-    fn iter_land(&self) -> impl Iterator<Item = (&Vec2<i32>, &LandscapeDiff)> {
+    /// Returns an [Iterator] over the [LandscapeDiff] ordered by `x` and `y` coordinates.
+    fn sorted(&self) -> impl Iterator<Item = (&Vec2<i32>, &LandscapeDiff)> {
         self.land.iter().sorted_by_key(|f| (f.0.x, f.0.y))
     }
 }
 
+/// Handles CLI arguments, log initialization, and the creation of a worker thread
+/// for running the actual [merge_all] function.
 fn main() -> Result<()> {
     Command::new("merged_lands").get_matches();
 
-    init_log();
+    let merged_lands_dir = PathBuf::from("Merged Lands");
+    let log_file_name = "merged_lands.log";
+
+    let has_log_file = init_log(&merged_lands_dir, Some(log_file_name));
 
     const STACK_SIZE: usize = 8 * 1024 * 1024;
 
     let work_thread = std::thread::Builder::new()
         .stack_size(STACK_SIZE)
-        .spawn(merge_all)
+        .spawn(|| merge_all(merged_lands_dir))
         .expect("unable to create worker thread");
 
     if let Err(e) = work_thread.join().expect("unable to join worker thread") {
@@ -98,18 +118,33 @@ fn main() -> Result<()> {
             "{}",
             format!("An unexpected error occurred: {:?}", e.bold()).bright_red()
         );
+
+        wait_for_user_exit(has_log_file);
         exit(1);
     }
 
+    wait_for_user_exit(has_log_file);
     Ok(())
 }
 
-fn merge_all() -> Result<()> {
+fn wait_for_user_exit(has_log_file: bool) {
+    if has_log_file {
+        return;
+    }
+
+    println!();
+    println!("Press Enter to exit.");
+    let mut buf = [0; 1];
+    std::io::stdin().read(&mut buf).ok();
+}
+
+/// The main function.
+fn merge_all(merged_lands_dir: PathBuf) -> Result<()> {
     let start = Instant::now();
 
     let mut known_textures = KnownTextures::new();
 
-    // TODO(dvd): Read CLI args, or config args.
+    // TODO(dvd): #mvp Read CLI args, or config args.
 
     // STEP 1:
     // For each Plugin, ordered by last modified:
@@ -142,16 +177,14 @@ fn merge_all() -> Result<()> {
         &mut known_textures,
     ));
 
-    // TODO(dvd): Generate ESP with vertex colors showing minor vs major conflicts.
-    // TODO(dvd): Support "ignored" maps for hiding differences that we don't care about.
+    // TODO(dvd): #feature Support "ignored" maps for hiding differences that we don't care about.
 
     let modded_landmasses = parsed_plugins
         .plugins
         .iter()
         .flat_map(|plugin| {
-            if plugin.name == file_name {
-                // TODO(dvd): Print error if a plugin of type merged_lands is found, but it has a different name.
-                // TODO(dvd): Replace this hack with the meta file.
+            if plugin.meta.meta_type == MetaType::MergedLands {
+                trace!("Skipping {}", plugin.name);
                 return None;
             }
 
@@ -201,7 +234,16 @@ fn merge_all() -> Result<()> {
     info!(":: Summarizing Conflicts ::");
 
     for modded_landmass in modded_landmasses.iter() {
-        save_landmass_images(&mut merged_lands, modded_landmass);
+        save_landmass_images(&merged_lands_dir, &merged_lands, modded_landmass);
+    }
+
+    // TODO(dvd): #mvp Read from config.
+    let debug_vertex_colors = true;
+    if debug_vertex_colors {
+        warn!(":: Adding Debug Colors ::");
+        for modded_landmass in modded_landmasses.iter() {
+            add_debug_vertex_colors_to_landmass(&mut merged_lands, modded_landmass);
+        }
     }
 
     // STEP 5:
@@ -237,7 +279,8 @@ fn merge_all() -> Result<()> {
     //  - [IMPLEMENTATION NOTE] Reuse last modified date if the ESP already exists.
     info!(":: Saving ::");
 
-    save_plugin(data_files, file_name, &landmass, &known_textures)?;
+    let cells = merge_cells(&parsed_plugins);
+    save_plugin(data_files, file_name, &landmass, &known_textures, &cells)?;
 
     info!(":: Finished ::");
     info!("Time Elapsed: {:?}", Instant::now().duration_since(start));
@@ -245,7 +288,9 @@ fn merge_all() -> Result<()> {
     Ok(())
 }
 
-fn init_log() {
+/// Initializes a [TermLogger] and [WriteLogger]. If the [WriteLogger] cannot be initialized,
+/// then the program will continue with only the [TermLogger].
+fn init_log(merged_lands_dir: &PathBuf, log_file_name: Option<&str>) -> bool {
     let config = ConfigBuilder::default()
         .set_time_level(LevelFilter::Off)
         .set_thread_level(LevelFilter::Off)
@@ -254,9 +299,13 @@ fn init_log() {
         .set_level_padding(LevelPadding::Right)
         .build();
 
-    let log_file_name = "merged_lands.log";
-    let write_logger = File::create(log_file_name)
-        .map(|file| WriteLogger::new(LevelFilter::Trace, config.clone(), file));
+    let log_file_path: Option<PathBuf> =
+        log_file_name.map(|name| [merged_lands_dir, &PathBuf::from(name)].iter().collect());
+
+    let write_logger = log_file_path.as_ref().map(|file_path| {
+        File::create(file_path)
+            .map(|file| WriteLogger::new(LevelFilter::Trace, config.clone(), file))
+    });
 
     let term_logger = TermLogger::new(
         LevelFilter::Trace,
@@ -266,35 +315,54 @@ fn init_log() {
     );
 
     match write_logger {
-        Ok(write_logger) => {
+        Some(Ok(write_logger)) => {
             CombinedLogger::init(vec![term_logger, write_logger]).expect("safe");
-            trace!("Log contents will be saved to {}", log_file_name);
+            trace!(
+                "Log file will be saved to {}",
+                log_file_path.expect("safe").to_string_lossy()
+            );
+
+            true
         }
-        Err(e) => {
+        Some(Err(e)) => {
             CombinedLogger::init(vec![term_logger]).expect("safe");
             error!(
                 "{} {}",
-                format!("Failed to create log file at {}", log_file_name.bold()).bright_red(),
+                format!(
+                    "Failed to create log file at {}",
+                    log_file_path.expect("safe").to_string_lossy().bold()
+                )
+                .bright_red(),
                 format!("due to: {:?}", e.bold()).bright_red()
             );
+
+            false
+        }
+        None => {
+            trace!("No log file will be created.");
+            CombinedLogger::init(vec![term_logger]).expect("safe");
+            false
         }
     }
 }
 
+/// Copy [Landscape] records from `plugin` and remap the texture indices with [RemappedTextures].
 fn try_copy_landscape_and_remap_textures(
     plugin: &Arc<ParsedPlugin>,
     remapped_textures: &RemappedTextures,
 ) -> Option<Landmass> {
     let mut landmass = Landmass::new(plugin.clone());
 
-    for land in landmass.plugin.records.objects_of_type::<Landscape>() {
+    for land in plugin.records.objects_of_type::<Landscape>() {
         let mut updated_land = land.clone();
         if let Some(texture_indices) = updated_land.texture_indices.as_mut() {
             for idx in texture_indices.data.flatten_mut() {
                 *idx = remapped_textures.remapped_index(*idx);
             }
         }
-        landmass.land.insert(coordinates(land), updated_land);
+
+        let coords = coordinates(land);
+        landmass.insert_land(coords, &plugin, &updated_land);
     }
 
     if !landmass.land.is_empty() {
@@ -304,6 +372,7 @@ fn try_copy_landscape_and_remap_textures(
     }
 }
 
+/// Creates a [Landmass] from the `plugin` and updates [KnownTextures].
 fn try_create_landmass(
     plugin: &Arc<ParsedPlugin>,
     known_textures: &mut KnownTextures,
@@ -316,6 +385,8 @@ fn try_create_landmass(
     try_copy_landscape_and_remap_textures(plugin, &remapped_textures)
 }
 
+/// Returns a "merged" [Landscape] combining `rhs` and `lhs` by stomping over
+/// any changes in `lhs` with the records from `rhs`.
 fn merge_tes3_landscape(lhs: &Landscape, rhs: &Landscape) -> Landscape {
     let mut land = lhs.clone();
 
@@ -353,7 +424,7 @@ fn merge_tes3_landscape(lhs: &Landscape, rhs: &Landscape) -> Landscape {
         }
     }
 
-    if new_data.intersects(LandscapeFlags::USES_WORLD_MAP_DATA) {
+    if new_data.uses_world_map_data() {
         if let Some(world_map_data) = rhs.world_map_data.as_ref() {
             land.world_map_data = Some(world_map_data.clone());
         }
@@ -364,6 +435,7 @@ fn merge_tes3_landscape(lhs: &Landscape, rhs: &Landscape) -> Landscape {
     land
 }
 
+/// Creates a single [Landmass] by calling [merge_tes3_landscape] on all `landmasses`.
 fn merge_tes3_landmasses(
     plugin: &Arc<ParsedPlugin>,
     landmasses: impl Iterator<Item = Landmass>,
@@ -372,47 +444,59 @@ fn merge_tes3_landmasses(
 
     for landmass in landmasses {
         for (coords, land) in landmass.land.iter() {
-            if merged_landmass.land.contains_key(coords) {
-                let merged_land =
-                    merge_tes3_landscape(merged_landmass.land.get(coords).expect("safe"), land);
-                merged_landmass.land.insert(*coords, merged_land);
+            let merged_land = if merged_landmass.land.contains_key(coords) {
+                merge_tes3_landscape(merged_landmass.land.get(coords).expect("safe"), land)
             } else {
-                merged_landmass.land.insert(*coords, land.clone());
-            }
+                land.clone()
+            };
 
-            merged_landmass
-                .plugins
-                .insert(*coords, landmass.plugin.clone());
+            merged_landmass.insert_land(*coords, &landmass.plugin, &merged_land);
         }
     }
 
     merged_landmass
 }
 
+/// Given a [ParsedPlugin] and a specific [Landscape], returns [LandData] representing
+/// what should be used when creating or merging a [LandscapeDiff].
+fn find_allowed_data(plugin: &ParsedPlugin, land: &Landscape) -> LandData {
+    let mut allowed_data: LandData = landscape_flags(land).into();
+
+    if !plugin.meta.height_map.included {
+        allowed_data.remove(LandData::VERTEX_HEIGHTS | LandData::VERTEX_NORMALS);
+    }
+
+    if !plugin.meta.vertex_colors.included {
+        allowed_data.remove(LandData::VERTEX_COLORS);
+    }
+
+    if !plugin.meta.texture_indices.included {
+        allowed_data.remove(LandData::TEXTURES);
+    }
+
+    if !plugin.meta.world_map_data.included {
+        allowed_data.remove(LandData::WORLD_MAP);
+    }
+
+    allowed_data
+}
+
+/// Creates a [LandmassDiff] representing the set of [LandscapeDiff] between the
+/// `landmass` and `reference` [Landmass].
 fn find_landmass_diff(landmass: &Landmass, reference: Arc<Landmass>) -> LandmassDiff {
     let mut landmass_diff = LandmassDiff::new(landmass.plugin.clone());
 
-    let is_cantons = landmass.plugin.name == "Cantons_on_the_Global_Map_v1.1.esp";
-
     for (coords, land) in landmass.land.iter() {
         let reference_land = reference.land.get(coords);
-
-        let allowed_data = if is_cantons {
-            // TODO(dvd): Replace this hack with the meta file.
-            LandData::WORLD_MAP
-        } else {
-            landscape_flags(land).into()
-        };
-
-        landmass_diff.land.insert(
-            *coords,
-            LandscapeDiff::from_difference(land, reference_land, allowed_data),
-        );
+        let allowed_data = find_allowed_data(&landmass.plugin, land);
+        let landscape_diff = LandscapeDiff::from_difference(land, reference_land, allowed_data);
+        landmass_diff.land.insert(*coords, landscape_diff);
     }
 
     landmass_diff
 }
 
+/// Merges `old` and `new` [LandscapeDiff].
 fn merge_landscape_diff(
     plugin: &Arc<ParsedPlugin>,
     old: &LandscapeDiff,
@@ -420,12 +504,6 @@ fn merge_landscape_diff(
 ) -> LandscapeDiff {
     let mut merged = old.clone();
     merged.plugins.push((plugin.clone(), new.modified_data()));
-
-    // TODO(dvd): Support changing the merge strategy.
-    // TODO(dvd): Add "Ignore" strategy -- e.g. for use with stuff like patched BCoM docks.
-
-    let merge_strategy: ResolveConflictStrategy = default();
-    let overwrite_strategy: OverwriteStrategy = default();
 
     let coords = merged.coords;
 
@@ -435,7 +513,7 @@ fn merge_landscape_diff(
         "height_map",
         old.height_map.as_ref(),
         new.height_map.as_ref(),
-        &merge_strategy,
+        plugin.meta.height_map.conflict_strategy,
     );
 
     merged.vertex_normals = apply_merge_strategy(
@@ -444,7 +522,7 @@ fn merge_landscape_diff(
         "vertex_normals",
         old.vertex_normals.as_ref(),
         new.vertex_normals.as_ref(),
-        &merge_strategy,
+        plugin.meta.height_map.conflict_strategy,
     );
 
     if let Some(vertex_normals) = merged.vertex_normals.as_ref() {
@@ -467,7 +545,7 @@ fn merge_landscape_diff(
         "world_map_data",
         old.world_map_data.as_ref(),
         new.world_map_data.as_ref(),
-        &merge_strategy,
+        plugin.meta.world_map_data.conflict_strategy,
     );
 
     merged.vertex_colors = apply_merge_strategy(
@@ -476,7 +554,7 @@ fn merge_landscape_diff(
         "vertex_colors",
         old.vertex_colors.as_ref(),
         new.vertex_colors.as_ref(),
-        &merge_strategy,
+        plugin.meta.vertex_colors.conflict_strategy,
     );
 
     merged.texture_indices = apply_merge_strategy(
@@ -485,21 +563,22 @@ fn merge_landscape_diff(
         "texture_indices",
         old.texture_indices.as_ref(),
         new.texture_indices.as_ref(),
-        &overwrite_strategy,
+        plugin.meta.texture_indices.conflict_strategy,
     );
 
     merged
 }
 
+/// Merges `plugin` [LandmassDiff] into `merged` [LandmassDiff].
 fn merge_landmass_into(merged: &mut LandmassDiff, plugin: &LandmassDiff) {
-    trace!(
+    debug!(
         "Merging {} LAND records from {} into {}",
         plugin.land.len(),
         plugin.plugin.name,
         merged.plugin.name
     );
 
-    for (coords, land) in plugin.iter_land() {
+    for (coords, land) in plugin.sorted() {
         if merged.land.contains_key(coords) {
             let merged_land = merged.land.get(coords).expect("safe");
             merged.land.insert(
@@ -518,22 +597,25 @@ fn merge_landmass_into(merged: &mut LandmassDiff, plugin: &LandmassDiff) {
     }
 }
 
+/// Creates a [Landmass] from `parsed_plugins` and updates [KnownTextures].
 fn create_tes3_landmass(
     plugin_name: &str,
     parsed_plugins: impl Iterator<Item = &Arc<ParsedPlugin>>,
     known_textures: &mut KnownTextures,
 ) -> Landmass {
-    let plugin = Arc::new(ParsedPlugin::new(plugin_name));
+    let plugin = Arc::new(ParsedPlugin::empty(plugin_name));
     let master_landmasses = parsed_plugins.flat_map(|esm| try_create_landmass(esm, known_textures));
     merge_tes3_landmasses(&plugin, master_landmasses)
 }
 
-fn create_merged_lands_from_reference(reference_landmass: Arc<Landmass>) -> LandmassDiff {
-    let mut landmass_diff = LandmassDiff::new(reference_landmass.plugin.clone());
+/// Creates a [LandmassDiff] representing a set of empty [LandscapeDiff] for the `reference` [Landmass].
+/// Prior to returning, the [LandmassDiff] will be updated by [repair_landmass_seams].
+fn create_merged_lands_from_reference(reference: Arc<Landmass>) -> LandmassDiff {
+    let mut landmass_diff = LandmassDiff::new(reference.plugin.clone());
 
-    for (coords, land) in reference_landmass.land.iter() {
+    for (coords, land) in reference.land.iter() {
         let allowed_data = landscape_flags(land).into();
-        let plugin = reference_landmass.plugins.get(coords).expect("safe");
+        let plugin = reference.plugins.get(coords).expect("safe");
         let landscape_diff = LandscapeDiff::from_reference(plugin.clone(), land, allowed_data);
         assert!(!landscape_diff.is_modified());
         landmass_diff.land.insert(*coords, landscape_diff);

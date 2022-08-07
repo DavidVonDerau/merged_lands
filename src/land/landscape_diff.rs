@@ -12,6 +12,8 @@ use std::sync::Arc;
 use tes3::esp::{Landscape, LandscapeFlags, ObjectFlags};
 
 #[derive(Clone)]
+/// A [LandscapeDiff] is all of the [OptionalTerrainMap] to describe the changes
+/// between some reference [Landscape] and successive changes by plugin [Landscape].
 pub struct LandscapeDiff {
     pub coords: Vec2<i32>,
     pub flags: ObjectFlags,
@@ -24,6 +26,7 @@ pub struct LandscapeDiff {
 }
 
 impl LandscapeDiff {
+    /// Returns `true` if the [Landscape] is modified.
     pub fn is_modified(&self) -> bool {
         self.height_map.is_modified()
             || self.vertex_normals.is_modified()
@@ -32,6 +35,7 @@ impl LandscapeDiff {
             || self.texture_indices.is_modified()
     }
 
+    /// Returns [LandData] representing which portions of the [Landscape] are modified.
     pub fn modified_data(&self) -> LandData {
         let mut modified = LandData::default();
 
@@ -58,6 +62,7 @@ impl LandscapeDiff {
         modified
     }
 
+    /// Creates a new [LandscapeDiff] from the provided [Landscape] and allowed [LandData].
     pub fn from_reference(
         plugin: Arc<ParsedPlugin>,
         land: &Landscape,
@@ -78,8 +83,7 @@ impl LandscapeDiff {
         );
 
         let world_map_data = Self::calculate_reference(
-            included_data.intersects(LandscapeFlags::USES_WORLD_MAP_DATA)
-                && allowed_data.contains(LandData::WORLD_MAP),
+            included_data.uses_world_map_data() && allowed_data.contains(LandData::WORLD_MAP),
             world_map_data(land).as_ref(),
         );
 
@@ -107,6 +111,8 @@ impl LandscapeDiff {
         }
     }
 
+    /// Creates a new [LandscapeDiff] from the provided `land` [Landscape] and allowed [LandData].
+    /// The differences are computed by comparing `land` to the `reference` [Landscape].
     pub fn from_difference(
         land: &Landscape,
         reference: Option<&Landscape>,
@@ -134,8 +140,7 @@ impl LandscapeDiff {
 
         let world_map_data = Self::calculate_differences(
             "world_map_data",
-            included_data.intersects(LandscapeFlags::USES_WORLD_MAP_DATA)
-                && allowed_data.contains(LandData::WORLD_MAP),
+            included_data.uses_world_map_data() && allowed_data.contains(LandData::WORLD_MAP),
             reference.and_then(world_map_data).as_ref(),
             world_map_data(land).as_ref(),
         );
@@ -168,6 +173,8 @@ impl LandscapeDiff {
         }
     }
 
+    /// Create a new [RelativeTerrainMap] by applying the `allow` [TerrainMap]
+    /// mask to the `old` [RelativeTerrainMap].
     pub fn apply_mask<U: RelativeTo, const T: usize>(
         old: &RelativeTerrainMap<U, T>,
         allow: Option<&TerrainMap<bool, T>>,
@@ -183,6 +190,8 @@ impl LandscapeDiff {
         new
     }
 
+    /// Returns an [OptionalTerrainMap] of the differences between `reference` and `plugin`, after
+    /// applying any provided `allow` [TerrainMap] mask with [Self::apply_mask].
     fn calculate_differences_with_mask<U: RelativeTo, const T: usize>(
         _value: &str,
         should_include: bool,
@@ -218,6 +227,7 @@ impl LandscapeDiff {
         }
     }
 
+    /// Returns an [OptionalTerrainMap] of the differences between `reference` and `plugin`.
     fn calculate_differences<U: RelativeTo, const T: usize>(
         value: &str,
         should_include: bool,
@@ -227,6 +237,7 @@ impl LandscapeDiff {
         Self::calculate_differences_with_mask(value, should_include, reference, plugin, false, None)
     }
 
+    /// Returns [RelativeTerrainMap::empty] if `plugin` is [Some] and `should_include`.
     fn calculate_reference<U: RelativeTo, const T: usize>(
         should_include: bool,
         plugin: Option<&TerrainMap<U, T>>,
@@ -235,6 +246,6 @@ impl LandscapeDiff {
             return None;
         }
 
-        plugin.map(|plugin| RelativeTerrainMap::from_difference(plugin, plugin))
+        plugin.map(|plugin| RelativeTerrainMap::empty(*plugin))
     }
 }

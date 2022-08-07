@@ -1,17 +1,27 @@
 use crate::land::terrain_map::Vec3;
 use crate::merge::round_to::RoundTo;
 
+/// The [ConflictType] classifies the severity of a conflict.
+/// This is determined by [ConflictParams] passed to the
+/// [ConflictResolver::average] method.
 pub enum ConflictType<T> {
+    /// A minor [ConflictType].
     Minor(T),
+    /// A major [ConflictType].
     Major(T),
 }
 
+/// A [Conflict] is an [Option] wrapper around [ConflictType].
 pub type Conflict<T> = Option<ConflictType<T>>;
 
+/// Types implementing [ConflictResolver] support the method [ConflictResolver::average].
 pub trait ConflictResolver: Sized {
+    /// Attempt to merge `self` with `rhs` per [ConflictParams] and return the [Conflict].
+    /// [None] is returned when `self == rhs`.
     fn average(self, rhs: Self, params: &ConflictParams) -> Conflict<Self>;
 }
 
+/// Controls the classification of a [Conflict] into [ConflictType::Minor] or [ConflictType::Major].
 pub struct ConflictParams {
     minor_threshold_pct: f32,
     minor_threshold_min: f32,
@@ -19,6 +29,8 @@ pub struct ConflictParams {
 }
 
 impl Default for ConflictParams {
+    /// The default [ConflictParams] are chosen to minimize
+    /// the likelihood that a [ConflictType::Minor] is noticeable.
     fn default() -> Self {
         Self {
             minor_threshold_pct: 0.3,
@@ -28,6 +40,7 @@ impl Default for ConflictParams {
     }
 }
 
+/// Returns [ConflictType] for `lhs` and `rhs` per [ConflictParams].
 fn classify_conflict<U>(lhs: f32, rhs: f32, params: &ConflictParams) -> ConflictType<U>
 where
     f32: RoundTo<U>,

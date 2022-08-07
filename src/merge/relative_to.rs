@@ -1,11 +1,18 @@
 use crate::land::terrain_map::Vec3;
+use const_default::ConstDefault;
 use std::fmt::Debug;
 
-pub trait RelativeTo: Copy + Default + Eq + Debug + Sized + 'static {
-    type Delta: Copy + Default + Eq + Debug + Sized + 'static;
+/// Types implementing [RelativeTo] can be subtracted with [RelativeTo::subtract] to compute
+/// some delta of type [RelativeTo::Delta]. The delta can be passed to [RelativeTo::add] to
+/// recompute the original value.
+pub trait RelativeTo: Copy + Default + ConstDefault + Eq + Debug + Sized + 'static {
+    /// A [RelativeTo::Delta] is a signed version of the type implementing [RelativeTo].
+    type Delta: Copy + Default + ConstDefault + Eq + Debug + Sized + 'static;
 
+    /// Subtract `rhs` from `lhs` and return the [RelativeTo::Delta].
     fn subtract(lhs: Self, rhs: Self) -> Self::Delta;
 
+    /// Add the [RelativeTo::Delta] `rhs` to `lhs`.
     fn add(lhs: Self, rhs: Self::Delta) -> Self;
 }
 

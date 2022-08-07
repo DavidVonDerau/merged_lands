@@ -1,13 +1,19 @@
 use crate::land::grid_access::{GridAccessor2D, GridIterator2D, Index2D, SquareGridIterator};
 use bitflags::bitflags;
+use const_default::ConstDefault;
 use std::default::default;
 use tes3::esp::LandscapeFlags;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 #[repr(C)]
+/// A [Vec2] is an `x` and `y` value. Can be converted to and from `[T; 2]`.
 pub struct Vec2<T> {
     pub x: T,
     pub y: T,
+}
+
+impl<T: ConstDefault> ConstDefault for Vec2<T> {
+    const DEFAULT: Self = Vec2::new(<T as ConstDefault>::DEFAULT, <T as ConstDefault>::DEFAULT);
 }
 
 impl<T> Vec2<T> {
@@ -30,10 +36,19 @@ impl<T> From<Vec2<T>> for [T; 2] {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default, Hash)]
 #[repr(C)]
+/// A [Vec3] is an `x`, `y`, and `z` value. Can be converted to and from `[T; 3]`.
 pub struct Vec3<T> {
     pub x: T,
     pub y: T,
     pub z: T,
+}
+
+impl<T: ConstDefault> ConstDefault for Vec3<T> {
+    const DEFAULT: Self = Vec3::new(
+        <T as ConstDefault>::DEFAULT,
+        <T as ConstDefault>::DEFAULT,
+        <T as ConstDefault>::DEFAULT,
+    );
 }
 
 impl<T> Vec3<T> {
@@ -54,6 +69,8 @@ impl<T> From<Vec3<T>> for [T; 3] {
     }
 }
 
+/// A wrapper type for `[[U; T]; T]`.
+/// Implements [GridAccessor2D] and [SquareGridIterator].
 pub type TerrainMap<U, const T: usize> = [[U; T]; T];
 
 impl<U: Copy, const T: usize> GridAccessor2D<U> for TerrainMap<U, T> {
@@ -74,6 +91,7 @@ impl<U, const T: usize> SquareGridIterator<T> for TerrainMap<U, T> {
 
 bitflags! {
     #[derive(Default)]
+    /// The data included with some [Landscape] or [LandscapeDiff].
     pub struct LandData: u32 {
         const VERTEX_COLORS = 0b10;
         const TEXTURES = 0b100;
@@ -100,7 +118,7 @@ impl From<LandscapeFlags> for LandData {
             new |= LandData::TEXTURES;
         }
 
-        if old.intersects(LandscapeFlags::USES_WORLD_MAP_DATA) {
+        if old.uses_world_map_data() {
             new |= LandData::WORLD_MAP;
         }
 

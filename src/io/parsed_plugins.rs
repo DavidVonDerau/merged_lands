@@ -1,16 +1,20 @@
+use crate::io::meta_schema::{PluginMeta, VersionedPluginMeta};
 use anyhow::{anyhow, bail, Context, Result};
 use filetime::FileTime;
 use itertools::Itertools;
 use log::{error, trace, warn};
 use owo_colors::OwoColorize;
 use regex::Regex;
+use std::default::default;
+use std::fs;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Lines};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tes3::esp::{Header, Landscape, LandscapeTexture, Plugin};
+use tes3::esp::{Cell, Header, Landscape, LandscapeTexture, Plugin, TES3Object};
 
+/// Parse a [Plugin] named `plugin_name` from the `data_files` directory.
 fn parse_records(data_files: &str, plugin_name: &str) -> Result<Plugin> {
     ParsedPlugins::check_data_files(data_files)
         .with_context(|| anyhow!("Unable to find plugin {}", plugin_name))?;
@@ -20,13 +24,22 @@ fn parse_records(data_files: &str, plugin_name: &str) -> Result<Plugin> {
     let mut plugin = Plugin::new();
     plugin
         .load_path_filtered(file_path, |tag| {
-            matches!(&tag, Header::TAG | LandscapeTexture::TAG | Landscape::TAG)
+            matches!(
+                &tag,
+                Header::TAG | LandscapeTexture::TAG | Landscape::TAG | Cell::TAG
+            )
         })
         .with_context(|| anyhow!("Failed to load records from plugin {}", plugin_name))?;
+
+    plugin.objects.retain(|object| match object {
+        TES3Object::Cell(cell) => cell.is_exterior(),
+        _ => true,
+    });
 
     Ok(plugin)
 }
 
+/// Open `filename` and return an iterator for the lines in the file.
 fn read_lines(filename: &Path) -> Result<Lines<BufReader<File>>> {
     let file = File::open(filename).with_context(|| {
         anyhow!(
@@ -37,12 +50,14 @@ fn read_lines(filename: &Path) -> Result<Lines<BufReader<File>>> {
     Ok(BufReader::new(file).lines())
 }
 
+/// Returns `true` if `path` ends with `.esm`, ignoring case.
 fn is_esm(path: &str) -> bool {
     Path::new(path)
         .extension()
         .map_or(false, |ext| ext.eq_ignore_ascii_case("esm"))
 }
 
+/// Sorts `plugin_list` by using the last modified date of the files in `data_files`.
 pub fn sort_plugins(data_files: &str, plugin_list: &mut [String]) -> Result<()> {
     ParsedPlugins::check_data_files(data_files)
         .with_context(|| anyhow!("Unable to sort load order with last modified date"))?;
@@ -63,23 +78,38 @@ pub fn sort_plugins(data_files: &str, plugin_list: &mut [String]) -> Result<()> 
     Ok(())
 }
 
+/// Returns a `name` describing a meta file by replacing the extension with `.mergedlands.toml`.
+pub fn meta_name(name: &str) -> String {
+    let file_name_without_extension = Path::new(&name).file_stem().unwrap().to_string_lossy();
+    format!("{}.mergedlands.toml", file_name_without_extension)
+}
+
+/// A [ParsedPlugin] is the `name`, [Plugin] records, and any [PluginMeta] data.
 pub struct ParsedPlugin {
+    /// The `name` of the plugin.
     pub name: String,
-    pub records: Plugin, // TODO(dvd): Config information
+    /// The parsed [Plugin] records.
+    pub records: Plugin,
+    /// The parsed [PluginMeta], or a default if no meta file was found.
+    pub meta: PluginMeta,
 }
 
 impl ParsedPlugin {
-    pub fn new(name: &str) -> Self {
+    /// Returns an empty [ParsedPlugin] with the provided `name`.
+    pub fn empty(name: &str) -> Self {
         Self {
             name: name.to_string(),
             records: Plugin::new(),
+            meta: default(),
         }
     }
 
-    fn from(name: &str, records: Plugin) -> Self {
+    /// Creates a [ParsedPlugin]. If `meta` is [None], a default [PluginMeta] is created.
+    fn from(name: &str, records: Plugin, meta: Option<PluginMeta>) -> Self {
         Self {
             name: name.to_string(),
             records,
+            meta: meta.unwrap_or_else(default),
         }
     }
 }
@@ -98,11 +128,18 @@ impl Hash for ParsedPlugin {
     }
 }
 
+/// All [ParsedPlugin] organized by `.esm` or `.esp`.
 pub struct ParsedPlugins {
+    /// The ordered list of `.esm` files.
+    /// These will be used for creating the reference [crate::Landmass].
     pub masters: Vec<Arc<ParsedPlugin>>,
+    /// The ordered list of `.esp` files.
+    /// These will be created for creating each [crate::LandmassDiff].
     pub plugins: Vec<Arc<ParsedPlugin>>,
 }
 
+/// Returns a [Vec] of plugin names by reading the `.ini` file located at
+/// `path`. Each plugin name is checked for existence in `data_files`.
 fn read_ini_file(data_files: &str, path: &Path) -> Result<Vec<String>> {
     ParsedPlugins::check_data_files(data_files)
         .with_context(|| anyhow!("Unable to parse plugins from ini file"))?;
@@ -163,6 +200,8 @@ fn read_ini_file(data_files: &str, path: &Path) -> Result<Vec<String>> {
 }
 
 impl ParsedPlugins {
+    /// Helper function for returning an `Err` if the `data_files` does not exist
+    /// or is otherwise inaccessible.
     pub fn check_data_files(data_files: &str) -> Result<()> {
         let exists = Path::new(data_files)
             .try_exists()
@@ -175,6 +214,9 @@ impl ParsedPlugins {
         Ok(())
     }
 
+    /// Creates a new [ParsedPlugins] from the `data_files` directory.
+    /// If `plugin_names` is [None], then the `.ini` file will be read from
+    /// the parent directory above `data_files` and used for the list instead.
     pub fn new(data_files: &str, plugin_names: Option<&[&str]>) -> Result<Self> {
         ParsedPlugins::check_data_files(data_files)
             .with_context(|| anyhow!("Unable to parse plugins"))?;
@@ -213,6 +255,7 @@ impl ParsedPlugins {
             })
             .with_context(|| anyhow!("Unable to parse plugins"))?;
 
+        // TODO(dvd): #feature Control this via config file.
         sort_plugins(data_files, &mut all_plugins)
             .with_context(|| anyhow!("Unknown load order for plugins"))?;
 
@@ -222,7 +265,34 @@ impl ParsedPlugins {
         for plugin_name in all_plugins {
             match parse_records(data_files, &plugin_name) {
                 Ok(records) => {
-                    let parsed_plugin = Arc::new(ParsedPlugin::from(&plugin_name, records));
+                    let meta_name = meta_name(&plugin_name);
+                    let meta_file_path: PathBuf = [data_files, &meta_name].iter().collect();
+
+                    let data = fs::read_to_string(meta_file_path)
+                        .with_context(|| anyhow!("Failed to read meta file."))
+                        .and_then(|text| {
+                            toml::from_str::<VersionedPluginMeta>(&text)
+                                .with_context(|| anyhow!("Failed to parse meta file contents."))
+                        });
+
+                    let meta = match data {
+                        Ok(VersionedPluginMeta::V0(meta)) => {
+                            trace!("Parsed meta file {}", meta_name);
+                            Some(meta)
+                        }
+                        Ok(VersionedPluginMeta::Unsupported) => {
+                            error!(
+                                "{}",
+                                format!("Unsupported plugin meta file {}", meta_name.bold())
+                                    .bright_red()
+                            );
+                            None
+                        }
+                        // TODO(dvd): #refactor Is there a TOML error we could be printing here?
+                        Err(_) => None,
+                    };
+
+                    let parsed_plugin = Arc::new(ParsedPlugin::from(&plugin_name, records, meta));
                     if is_esm(&plugin_name) {
                         masters.push(parsed_plugin);
                     } else {
@@ -231,13 +301,9 @@ impl ParsedPlugins {
                 }
                 Err(e) => {
                     error!(
-                        "{}",
-                        format!(
-                            "Failed to parse plugin {} due to: {:?}",
-                            plugin_name.bold(),
-                            e.bold()
-                        )
-                        .bright_red()
+                        "{} {}",
+                        format!("Failed to parse plugin {}", plugin_name.bold()).bright_red(),
+                        format!("due to: {:?}", e.bold()).bright_red()
                     );
                 }
             }

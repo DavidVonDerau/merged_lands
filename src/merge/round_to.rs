@@ -1,4 +1,6 @@
+/// Types implemented [RoundTo] may be rounded to `T` via [RoundTo::round_to].
 pub trait RoundTo<T> {
+    /// Round `self` to `T`.
     fn round_to(self) -> T;
 }
 

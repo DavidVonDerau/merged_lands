@@ -1,12 +1,13 @@
-use crate::io::parsed_plugins::ParsedPlugins;
+use crate::io::parsed_plugins::{ParsedPlugin, ParsedPlugins};
 use crate::land::grid_access::SquareGridIterator;
 use crate::land::textures::{KnownTextures, RemappedTextures};
 use crate::repair::seam_detection::repair_landmass_seams;
-use crate::{LandmassDiff, ParsedPlugin};
+use crate::LandmassDiff;
 use log::trace;
 use std::sync::Arc;
 use tes3::esp::LandscapeTexture;
 
+/// Remove any unmodified [crate::LandscapeDiff] from the [LandmassDiff].
 pub fn clean_landmass_diff(landmass: &mut LandmassDiff) {
     let mut unmodified = Vec::new();
 
@@ -24,11 +25,13 @@ pub fn clean_landmass_diff(landmass: &mut LandmassDiff) {
 
     trace!("Removing {} unmodified LAND records", unmodified.len());
 
-    for coords in unmodified {
+    for coords in unmodified.drain(..) {
         landmass.land.remove(&coords);
     }
 }
 
+/// Remove any unused [crate::land::textures::KnownTexture] from the [KnownTextures].
+/// Returns [RemappedTextures] for anything that was not removed.
 pub fn clean_known_textures(
     parsed_plugins: &ParsedPlugins,
     landmass: &LandmassDiff,
@@ -58,7 +61,7 @@ pub fn clean_known_textures(
     // Determine all LTEX records in use in the final MergedLands.esp.
 
     let mut used_ids = vec![false; known_textures.len()];
-    for (_, land) in landmass.iter_land() {
+    for (_, land) in landmass.sorted() {
         let Some(texture_indices) = land.texture_indices.as_ref() else {
             continue;
         };

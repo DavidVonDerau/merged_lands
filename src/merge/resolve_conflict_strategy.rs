@@ -8,6 +8,7 @@ use crate::ParsedPlugin;
 use std::default::default;
 
 #[derive(Default)]
+/// Implements [MergeStrategy] to resolve any conflicts by merging changes together.
 pub struct ResolveConflictStrategy {}
 
 impl MergeStrategy for ResolveConflictStrategy {

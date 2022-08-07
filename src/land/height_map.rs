@@ -6,18 +6,22 @@ use owo_colors::OwoColorize;
 use std::default::default;
 use tes3::esp::{Landscape, LandscapeFlags, VertexHeights};
 
-pub const CELL_SIZE: usize = 65;
-pub const HEIGHT_MAP_SCALE_FACTOR: i32 = 8;
-pub const HEIGHT_MAP_SCALE_FACTOR_F32: f32 = HEIGHT_MAP_SCALE_FACTOR as f32;
+const CELL_SIZE: usize = 65;
+const HEIGHT_MAP_SCALE_FACTOR: i32 = 8;
+const HEIGHT_MAP_SCALE_FACTOR_F32: f32 = HEIGHT_MAP_SCALE_FACTOR as f32;
 
+/// Limits `gradient` to the range of a [i8].
 fn truncate_gradient(gradient: &mut i32) {
-    if *gradient > 127 {
-        *gradient = 127;
-    } else if *gradient < -128 {
-        *gradient = -128;
+    if *gradient > i8::MAX as i32 {
+        *gradient = i8::MAX as i32;
+    } else if *gradient < i8::MIN as i32 {
+        *gradient = i8::MIN as i32;
     }
 }
 
+/// Calculates the vertex heights for the [TerrainMap] as a [TerrainMap] representing
+/// a set of x-y differences and an [f32] for an offset. This is the tuple form of
+/// the [VertexHeights] for any array size `T`.
 fn calculate_vertex_heights<const T: usize>(
     height_map: &TerrainMap<i32, T>,
 ) -> (f32, TerrainMap<i8, T>) {
@@ -50,6 +54,7 @@ fn calculate_vertex_heights<const T: usize>(
     (offset, terrain)
 }
 
+/// Creates [VertexHeights] from the `height_map` [TerrainMap].
 pub fn calculate_vertex_heights_tes3(height_map: &TerrainMap<i32, CELL_SIZE>) -> VertexHeights {
     let (offset, terrain) = calculate_vertex_heights(height_map);
     VertexHeights {
@@ -58,6 +63,7 @@ pub fn calculate_vertex_heights_tes3(height_map: &TerrainMap<i32, CELL_SIZE>) ->
     }
 }
 
+/// Creates [TerrainMap] from the `vertex_heights` [VertexHeights].
 fn calculate_height_map<const T: usize>(vertex_heights: &VertexHeights) -> TerrainMap<i32, T> {
     let mut grid_height = [[0; T]; T];
     let mut height = vertex_heights.offset as i32;
@@ -79,9 +85,11 @@ fn calculate_height_map<const T: usize>(vertex_heights: &VertexHeights) -> Terra
     grid_height
 }
 
+/// Calculates the vertex normals for the [TerrainMap].
 pub fn calculate_vertex_normals_map<const T: usize>(
     height_map: &TerrainMap<i32, T>,
 ) -> TerrainMap<Vec3<i8>, T> {
+    /// On the edge of the cell, reuse the last row or column.
     fn fix_coords<const T: usize>(coords: Index2D) -> Index2D {
         let x = if coords.x + 1 == T {
             coords.x - 1
@@ -139,6 +147,9 @@ pub fn calculate_vertex_normals_map<const T: usize>(
 
     terrain
 }
+
+/// Calculate a [TerrainMap] of the [Landscape]'s height map by converting the
+/// [VertexHeights] if present.
 pub fn try_calculate_height_map(land: &Landscape) -> Option<TerrainMap<i32, 65>> {
     let included_data = landscape_flags(land);
     if !included_data.contains(LandscapeFlags::USES_VERTEX_HEIGHTS_AND_NORMALS) {

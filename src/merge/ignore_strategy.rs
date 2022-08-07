@@ -8,10 +8,10 @@ use crate::ParsedPlugin;
 use std::default::default;
 
 #[derive(Default)]
-/// Implements [MergeStrategy] to overwrite any conflicts with the newest change.
-pub struct OverwriteStrategy {}
+/// Implements [MergeStrategy] to ignore any conflicts by dropping the newest change.
+pub struct IgnoreStrategy {}
 
-impl MergeStrategy for OverwriteStrategy {
+impl MergeStrategy for IgnoreStrategy {
     fn apply<U: RelativeTo + ConflictResolver, const T: usize>(
         &self,
         _coords: Vec2<i32>,
@@ -34,8 +34,8 @@ impl MergeStrategy for OverwriteStrategy {
             } else if !lhs_diff && !rhs_diff {
                 // NOP.
             } else {
-                // Conflict -- choose rhs.
-                diff = rhs.get_difference(coords);
+                // Conflict -- choose lhs.
+                diff = lhs.get_difference(coords);
             }
 
             new.set_difference(coords, diff);
