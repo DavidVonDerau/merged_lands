@@ -18,7 +18,7 @@ use crate::io::save_to_plugin::{convert_landmass_diff_to_landmass, save_plugin};
 use crate::land::conversions::{coordinates, landscape_flags};
 use crate::land::landscape_diff::LandscapeDiff;
 use crate::land::terrain_map::{LandData, Vec2};
-use crate::land::textures::{KnownTextures, RemappedTextures};
+use crate::land::textures::{IndexVTEX, KnownTextures, RemappedTextures};
 use crate::merge::cells::merge_cells;
 use crate::merge::merge_strategy::apply_merge_strategy;
 use crate::merge::relative_terrain_map::{IsModified, RelativeTerrainMap};
@@ -353,16 +353,23 @@ fn try_copy_landscape_and_remap_textures(
 ) -> Option<Landmass> {
     let mut landmass = Landmass::new(plugin.clone());
 
+    if plugin.records.objects_of_type::<Landscape>().any(|_| true) {
+        debug!("Creating landmass from {}", plugin.name);
+    }
+
     for land in plugin.records.objects_of_type::<Landscape>() {
         let mut updated_land = land.clone();
+
         if let Some(texture_indices) = updated_land.texture_indices.as_mut() {
             for idx in texture_indices.data.flatten_mut() {
-                *idx = remapped_textures.remapped_index(*idx);
+                *idx = remapped_textures
+                    .remapped_index(IndexVTEX::new(*idx))
+                    .as_u16();
             }
         }
 
         let coords = coordinates(land);
-        landmass.insert_land(coords, &plugin, &updated_land);
+        landmass.insert_land(coords, plugin, &updated_land);
     }
 
     if !landmass.land.is_empty() {
@@ -377,6 +384,14 @@ fn try_create_landmass(
     plugin: &Arc<ParsedPlugin>,
     known_textures: &mut KnownTextures,
 ) -> Option<Landmass> {
+    if plugin
+        .records
+        .objects_of_type::<LandscapeTexture>()
+        .any(|_| true)
+    {
+        debug!("Remapping textures from {}", plugin.name);
+    }
+
     let mut remapped_textures = RemappedTextures::new(known_textures);
     for texture in plugin.records.objects_of_type::<LandscapeTexture>() {
         known_textures.add_remapped_texture(plugin, texture, &mut remapped_textures);

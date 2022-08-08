@@ -1,5 +1,6 @@
 use crate::land::grid_access::{GridAccessor2D, SquareGridIterator};
 use crate::land::terrain_map::{TerrainMap, Vec2, Vec3};
+use crate::land::textures::IndexVTEX;
 use std::default::default;
 use tes3::esp::{Landscape, LandscapeFlags};
 
@@ -39,10 +40,10 @@ pub fn world_map_data(land: &Landscape) -> Option<TerrainMap<u8, 9>> {
 }
 
 /// Access the `texture_indices` of a [Landscape] as a [TerrainMap].
-pub fn texture_indices(land: &Landscape) -> Option<TerrainMap<u16, 16>> {
+pub fn texture_indices(land: &Landscape) -> Option<TerrainMap<IndexVTEX, 16>> {
     land.texture_indices
         .as_ref()
-        .map(|record| convert_terrain_map(&record.data, |value| value))
+        .map(|record| convert_terrain_map(&record.data, IndexVTEX::new))
 }
 
 /// Access the [LandscapeFlags] of a [Landscape].

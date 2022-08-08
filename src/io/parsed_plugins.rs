@@ -62,6 +62,14 @@ pub fn sort_plugins(data_files: &str, plugin_list: &mut [String]) -> Result<()> 
     ParsedPlugins::check_data_files(data_files)
         .with_context(|| anyhow!("Unable to sort load order with last modified date"))?;
 
+    for plugin_name in plugin_list.iter() {
+        let file_path: PathBuf = [data_files, plugin_name].iter().collect();
+        file_path
+            .metadata()
+            .map(|metadata| FileTime::from_last_modification_time(&metadata))
+            .with_context(|| anyhow!("Unable to find plugin {}", plugin_name))?;
+    }
+
     let order = |plugin_name: &str| {
         // Order by modified time, with ESMs given priority.
         let is_esm = is_esm(plugin_name);
@@ -69,7 +77,7 @@ pub fn sort_plugins(data_files: &str, plugin_list: &mut [String]) -> Result<()> 
         let last_modified_time = file_path
             .metadata()
             .map(|metadata| FileTime::from_last_modification_time(&metadata))
-            .expect("file does not have a last modified time");
+            .expect("safe");
         (!is_esm, last_modified_time)
     };
 

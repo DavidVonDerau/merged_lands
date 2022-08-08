@@ -1,5 +1,5 @@
 use crate::io::meta_schema::{MetaType, PluginMeta, VersionedPluginMeta};
-use crate::io::parsed_plugins::{meta_name, sort_plugins, ParsedPlugins};
+use crate::io::parsed_plugins::{meta_name, sort_plugins, ParsedPlugin, ParsedPlugins};
 use crate::land::conversions::convert_terrain_map;
 use crate::land::height_map::calculate_vertex_heights_tes3;
 use crate::land::landscape_diff::LandscapeDiff;
@@ -18,6 +18,7 @@ use owo_colors::OwoColorize;
 use std::default::default;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tes3::esp::{
     FixedString, Header, Landscape, LandscapeFlags, Plugin, TES3Object, TextureIndices,
     VertexColors, VertexNormals, WorldMapData,
@@ -86,7 +87,7 @@ fn convert_landscape_diff_to_landscape(
         }
 
         new_landscape.texture_indices = Some(TextureIndices {
-            data: Box::new(texture_indices),
+            data: Box::new(convert_terrain_map(&texture_indices, |v| v.as_u16())),
         });
     }
 
@@ -148,14 +149,17 @@ pub fn save_plugin(
     let masters = {
         let mut dependencies = HashSet::new();
 
+        let mut add_dependency =
+            |dependency: &Arc<ParsedPlugin>| dependencies.insert(dependency.name.clone());
+
         // Add plugins that contribute textures.
         for texture in known_textures.sorted() {
-            dependencies.insert(&*texture.plugin);
+            add_dependency(&texture.plugin);
         }
 
         // Add plugins used for the land.
         for plugin in landmass.plugins.values() {
-            dependencies.insert(plugin);
+            add_dependency(plugin);
         }
 
         // Add plugins that modified cells.
@@ -168,7 +172,7 @@ pub fn save_plugin(
             })?;
 
             let plugin = cell.plugins.last().expect("safe");
-            if dependencies.insert(plugin) {
+            if add_dependency(plugin) {
                 trace!(
                     "({:>4}, {:>4})   | {:<50} | {}",
                     coords.x,
@@ -183,10 +187,7 @@ pub fn save_plugin(
             }
         }
 
-        let mut masters = dependencies
-            .drain()
-            .map(|plugin| plugin.name.to_string())
-            .collect_vec();
+        let mut masters = dependencies.drain().collect_vec();
 
         sort_plugins(data_files, &mut masters)
             .with_context(|| anyhow!("Unknown load order for {} dependencies", name))?;
@@ -238,7 +239,7 @@ pub fn save_plugin(
     for known_texture in known_textures.sorted() {
         trace!(
             "Texture | {:>4} | {:<30} | {}",
-            known_texture.index(),
+            known_texture.index().as_u16(),
             known_texture.id(),
             known_texture.plugin.name
         );

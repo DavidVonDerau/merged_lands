@@ -4,6 +4,7 @@ use crate::land::conversions::{
 use crate::land::grid_access::{GridAccessor2D, SquareGridIterator};
 use crate::land::height_map::try_calculate_height_map;
 use crate::land::terrain_map::{LandData, TerrainMap, Vec2, Vec3};
+use crate::land::textures::IndexVTEX;
 use crate::merge::relative_terrain_map::{IsModified, OptionalTerrainMap, RelativeTerrainMap};
 use crate::merge::relative_to::RelativeTo;
 use crate::ParsedPlugin;
@@ -21,7 +22,7 @@ pub struct LandscapeDiff {
     pub vertex_normals: OptionalTerrainMap<Vec3<i8>, 65>,
     pub world_map_data: OptionalTerrainMap<u8, 9>,
     pub vertex_colors: OptionalTerrainMap<Vec3<u8>, 65>,
-    pub texture_indices: OptionalTerrainMap<u16, 16>,
+    pub texture_indices: OptionalTerrainMap<IndexVTEX, 16>,
     pub plugins: Vec<(Arc<ParsedPlugin>, LandData)>,
 }
 

@@ -59,8 +59,9 @@ pub fn clean_known_textures(
     }
 
     // Determine all LTEX records in use in the final MergedLands.esp.
+    // Reserve extra texture index for the default 0th texture.
 
-    let mut used_ids = vec![false; known_textures.len()];
+    let mut used_ids = vec![false; known_textures.len() + 1];
     for (_, land) in landmass.sorted() {
         let Some(texture_indices) = land.texture_indices.as_ref() else {
             continue;
@@ -68,9 +69,7 @@ pub fn clean_known_textures(
 
         for coords in texture_indices.iter_grid() {
             let key = texture_indices.get_value(coords);
-            if key != 0 {
-                used_ids[(key - 1) as usize] = true;
-            }
+            used_ids[key.as_u16() as usize] = true;
         }
     }
 
