@@ -203,15 +203,10 @@ pub fn repair_landmass_seams(merged: &mut LandmassDiff) -> usize {
     let mut visited = HashSet::new();
     let mut repaired = HashSet::new();
 
-    let coords_to_check = merged.possible_seams.drain().collect_vec();
-
     let mut num_seams_repaired = 0;
 
-    for coords in coords_to_check.iter() {
-        repair_corner_seams(merged, *coords, &mut num_seams_repaired);
-    }
-
-    for coords in coords_to_check.into_iter() {
+    for coords in merged.sorted().map(|pair| *pair.0).collect_vec() {
+        repair_corner_seams(merged, coords, &mut num_seams_repaired);
         push_back_neighbors(&mut possible_seams, &mut visited, coords);
     }
 
@@ -222,7 +217,7 @@ pub fn repair_landmass_seams(merged: &mut LandmassDiff) -> usize {
         lhs_map: &mut RelativeTerrainMap<i32, T>,
         rhs_map: &mut RelativeTerrainMap<i32, T>,
         index: usize,
-    ) -> bool {
+    ) -> usize {
         let lhs_value = lhs_map.get_value(lhs_coord);
         let rhs_value = rhs_map.get_value(rhs_coord);
         if lhs_value != rhs_value {
@@ -233,11 +228,13 @@ pub fn repair_landmass_seams(merged: &mut LandmassDiff) -> usize {
 
             // TODO(dvd): #feature Should this use the ConflictResolver instead?
             let average = (lhs_value + rhs_value) / 2;
+            let lhs_diff = (average - lhs_value).abs();
+            let rhs_diff = (average - rhs_value).abs();
             lhs_map.set_value(lhs_coord, average);
             rhs_map.set_value(rhs_coord, average);
-            true
+            lhs_diff.max(rhs_diff) as usize
         } else {
-            false
+            0
         }
     }
 
@@ -269,41 +266,58 @@ pub fn repair_landmass_seams(merged: &mut LandmassDiff) -> usize {
         };
 
         let mut seam_size = 0;
+        let mut sum = 0;
+        let mut max_delta = usize::MIN;
+        let mut min_delta = usize::MAX;
         if is_top_seam {
             for x in 0..65 {
                 let lhs_coord = Index2D::new(x, 64);
                 let rhs_coord = Index2D::new(x, 0);
-                if try_repair_seam(lhs_coord, rhs_coord, lhs_height_map, rhs_height_map, x) {
+                let delta =
+                    try_repair_seam(lhs_coord, rhs_coord, lhs_height_map, rhs_height_map, x);
+                if delta > 0 {
                     num_seams_repaired += 1;
                     seam_size += 1;
+                    sum += delta;
+                    max_delta = max_delta.max(delta);
+                    min_delta = min_delta.min(delta);
                 }
             }
         } else {
             for y in 0..65 {
                 let lhs_coord = Index2D::new(64, y);
                 let rhs_coord = Index2D::new(0, y);
-                if try_repair_seam(lhs_coord, rhs_coord, lhs_height_map, rhs_height_map, y) {
+                let delta =
+                    try_repair_seam(lhs_coord, rhs_coord, lhs_height_map, rhs_height_map, y);
+                if delta > 0 {
                     num_seams_repaired += 1;
                     seam_size += 1;
+                    sum += delta;
+                    max_delta = max_delta.max(delta);
+                    min_delta = min_delta.min(delta);
                 }
             }
         }
 
         if seam_size > 0 {
-            repaired.insert((next, seam_size));
+            let average = sum / seam_size;
+            repaired.insert((next, seam_size, max_delta, min_delta, average));
         }
     }
 
     if num_seams_repaired > 0 {
         debug!("Repaired {} seams", num_seams_repaired);
-        for seam in repaired {
+        for seam in repaired.iter().sorted_by_key(|a| std::cmp::Reverse(a.1)) {
             trace!(
-                " - ({:>4}, {:>4}) | ({:>4}, {:>4}) | # of Seams = {}",
+                " - ({:>4}, {:>4}) | ({:>4}, {:>4}) | # of Seams = {:<3} | Max = {:<3} | Min = {:<3} | Avg = {}",
                 seam.0 .0.x,
                 seam.0 .0.y,
                 seam.0 .1.x,
                 seam.0 .1.y,
-                seam.1
+                seam.1,
+                seam.2,
+                seam.3,
+                seam.4
             );
         }
     }

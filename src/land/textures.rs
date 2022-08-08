@@ -193,15 +193,15 @@ impl KnownTextures {
     /// Update the [KnownTexture] matching `texture` with changes from [ParsedPlugin] `plugin`.
     pub fn update_texture(&mut self, plugin: &Arc<ParsedPlugin>, texture: &LandscapeTexture) {
         let known_texture = self.inner.get_mut(&texture.id).expect("unknown texture ID");
-        if let Some(new_texture) = &texture.texture {
+        if let Some(file_name) = &texture.file_name {
             if known_texture
                 .inner
-                .texture
+                .file_name
                 .as_ref()
-                .map(|texture| texture != new_texture)
+                .map(|old_file_name| old_file_name != file_name)
                 .unwrap_or(true)
             {
-                known_texture.inner.texture = Some(new_texture.into());
+                known_texture.inner.file_name = Some(file_name.into());
                 known_texture.plugin = plugin.clone();
             }
         }

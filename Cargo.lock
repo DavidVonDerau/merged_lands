@@ -131,7 +131,7 @@ checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 [[package]]
 name = "bytes_io"
 version = "0.0.0"
-source = "git+https://github.com/Greatness7/tes3#9b0519c1db41fa0f0fabe8f610f48b2abff8828a"
+source = "git+https://github.com/Greatness7/tes3#a7a5a13bd9f65f9f99637db90b4d390a90420d74"
 dependencies = [
  "bstr",
  "bytemuck",
@@ -146,7 +146,7 @@ dependencies = [
 [[package]]
 name = "bytes_io_macros"
 version = "0.0.0"
-source = "git+https://github.com/Greatness7/tes3#9b0519c1db41fa0f0fabe8f610f48b2abff8828a"
+source = "git+https://github.com/Greatness7/tes3#a7a5a13bd9f65f9f99637db90b4d390a90420d74"
 dependencies = [
  "quote",
  "syn",
@@ -366,7 +366,7 @@ dependencies = [
 [[package]]
 name = "esp"
 version = "0.0.0"
-source = "git+https://github.com/Greatness7/tes3#9b0519c1db41fa0f0fabe8f610f48b2abff8828a"
+source = "git+https://github.com/Greatness7/tes3#a7a5a13bd9f65f9f99637db90b4d390a90420d74"
 dependencies = [
  "bitflags",
  "bstr",
@@ -382,7 +382,7 @@ dependencies = [
 [[package]]
 name = "esp_macros"
 version = "0.0.0"
-source = "git+https://github.com/Greatness7/tes3#9b0519c1db41fa0f0fabe8f610f48b2abff8828a"
+source = "git+https://github.com/Greatness7/tes3#a7a5a13bd9f65f9f99637db90b4d390a90420d74"
 dependencies = [
  "quote",
  "syn",
@@ -1129,7 +1129,7 @@ dependencies = [
 [[package]]
 name = "tes3"
 version = "0.0.1"
-source = "git+https://github.com/Greatness7/tes3#9b0519c1db41fa0f0fabe8f610f48b2abff8828a"
+source = "git+https://github.com/Greatness7/tes3#a7a5a13bd9f65f9f99637db90b4d390a90420d74"
 dependencies = [
  "esp",
 ]

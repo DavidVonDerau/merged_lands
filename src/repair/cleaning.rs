@@ -11,10 +11,6 @@ use tes3::esp::LandscapeTexture;
 pub fn clean_landmass_diff(landmass: &mut LandmassDiff) {
     let mut unmodified = Vec::new();
 
-    for coords in landmass.land.keys() {
-        landmass.possible_seams.insert(*coords);
-    }
-
     assert_eq!(repair_landmass_seams(landmass), 0);
 
     for (coords, land) in landmass.land.iter_mut() {

@@ -27,7 +27,7 @@ use crate::repair::debugging::add_debug_vertex_colors_to_landmass;
 use crate::repair::seam_detection::repair_landmass_seams;
 use anyhow::Result;
 use clap::Command;
-use hashbrown::{HashMap, HashSet};
+use hashbrown::HashMap;
 use itertools::Itertools;
 use log::{debug, error, info, trace, warn};
 use mimalloc::MiMalloc;
@@ -78,7 +78,6 @@ impl Landmass {
 pub struct LandmassDiff {
     plugin: Arc<ParsedPlugin>,
     land: HashMap<Vec2<i32>, LandscapeDiff>,
-    possible_seams: HashSet<Vec2<i32>>,
 }
 
 impl LandmassDiff {
@@ -86,7 +85,6 @@ impl LandmassDiff {
         Self {
             plugin,
             land: HashMap::new(),
-            possible_seams: HashSet::new(),
         }
     }
 
@@ -226,8 +224,12 @@ fn merge_all(merged_lands_dir: PathBuf) -> Result<()> {
 
     for modded_landmass in modded_landmasses.iter() {
         merge_landmass_into(&mut merged_lands, modded_landmass);
-        repair_landmass_seams(&mut merged_lands);
     }
+
+    // We fix seams as a post-processing step because individual mods can introduce
+    // tears into the landscape that would be fixed by subsequent mods. (e.g. patches)
+    // If we try to fix the seams early, sadness results.
+    repair_landmass_seams(&mut merged_lands);
 
     // STEP 4:
     //  - Produce images of the final merge results.
@@ -607,8 +609,6 @@ fn merge_landmass_into(merged: &mut LandmassDiff, plugin: &LandmassDiff) {
                 .push((plugin.plugin.clone(), land.modified_data()));
             merged.land.insert(*coords, merged_land);
         }
-
-        merged.possible_seams.insert(*coords);
     }
 }
 
@@ -634,10 +634,7 @@ fn create_merged_lands_from_reference(reference: Arc<Landmass>) -> LandmassDiff 
         let landscape_diff = LandscapeDiff::from_reference(plugin.clone(), land, allowed_data);
         assert!(!landscape_diff.is_modified());
         landmass_diff.land.insert(*coords, landscape_diff);
-        landmass_diff.possible_seams.insert(*coords);
     }
-
-    repair_landmass_seams(&mut landmass_diff);
 
     for (_, land) in landmass_diff.land.iter_mut() {
         assert_eq!(land.plugins.len(), 1);
