@@ -1,3 +1,4 @@
+use crate::cli::SortOrder;
 use crate::io::meta_schema::{MetaType, PluginMeta, VersionedPluginMeta};
 use crate::io::parsed_plugins::{meta_name, sort_plugins, ParsedPlugin, ParsedPlugins};
 use crate::land::conversions::convert_terrain_map;
@@ -17,7 +18,7 @@ use log::{debug, trace, warn};
 use owo_colors::OwoColorize;
 use std::default::default;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tes3::esp::{
     FixedString, Header, Landscape, LandscapeFlags, Plugin, TES3Object, TextureIndices,
@@ -119,28 +120,24 @@ pub fn convert_landmass_diff_to_landmass(
 
 /// Creates a master record for plugin `name` by appending the size
 /// of the file in bytes to the tuple `(name, file_size)`.
-fn to_master_record(data_files: &str, name: String) -> (String, u64) {
-    let merged_filepath: PathBuf = [data_files, &name].iter().collect();
+fn to_master_record(data_files: &Path, name: String) -> (String, u64) {
+    let merged_filepath: PathBuf = [data_files, Path::new(&name)].iter().collect();
     let file_size = file_real_size(merged_filepath).unwrap_or(0);
     (name, file_size)
 }
 
 /// Saves the [Landmass] with [KnownTextures].
 pub fn save_plugin(
-    data_files: &str,
-    name: &str,
+    data_files: &Path,
+    output_file_dir: &Path,
+    output_name: &str,
+    sort_order: SortOrder,
     landmass: &Landmass,
     known_textures: &KnownTextures,
     cells: &HashMap<Vec2<i32>, ModifiedCell>,
 ) -> Result<()> {
-    ParsedPlugins::check_data_files(data_files)
-        .with_context(|| anyhow!("Unable to save file {}", name))?;
-
-    let merged_filepath: PathBuf = [data_files, name].iter().collect();
-    let last_modified_time = merged_filepath
-        .metadata()
-        .map(|metadata| FileTime::from_last_modification_time(&metadata))
-        .unwrap_or_else(|_| FileTime::now());
+    ParsedPlugins::check_dir_exists(output_file_dir)
+        .with_context(|| anyhow!("Unable to save file {}", output_name))?;
 
     let mut plugin = Plugin::new();
 
@@ -189,8 +186,8 @@ pub fn save_plugin(
 
         let mut masters = dependencies.drain().collect_vec();
 
-        sort_plugins(data_files, &mut masters)
-            .with_context(|| anyhow!("Unknown load order for {} dependencies", name))?;
+        sort_plugins(data_files, &mut masters, sort_order)
+            .with_context(|| anyhow!("Unknown load order for {} dependencies", output_name))?;
 
         Some(
             masters
@@ -255,8 +252,8 @@ pub fn save_plugin(
         plugin.objects.push(TES3Object::Landscape(land.clone()));
     }
 
-    let meta_name = meta_name(name);
-    let merged_meta: PathBuf = [data_files, &meta_name].iter().collect();
+    let meta_name = meta_name(output_name);
+    let merged_meta: PathBuf = [output_file_dir, Path::new(&meta_name)].iter().collect();
 
     let meta = VersionedPluginMeta::V0(PluginMeta {
         meta_type: MetaType::MergedLands,
@@ -270,16 +267,22 @@ pub fn save_plugin(
     fs::write(merged_meta, toml::to_string(&meta).expect("safe"))
         .with_context(|| anyhow!("Unable to save plugin meta {}", meta_name))?;
 
-    trace!("Saving file {}", name);
+    let merged_filepath: PathBuf = [output_file_dir, Path::new(output_name)].iter().collect();
+    let last_modified_time = merged_filepath
+        .metadata()
+        .map(|metadata| FileTime::from_last_modification_time(&metadata))
+        .unwrap_or_else(|_| FileTime::now());
+
+    trace!("Saving file {}", output_name);
     plugin
         .save_path(&merged_filepath)
-        .with_context(|| anyhow!("Unable to save plugin {}", name))?;
+        .with_context(|| anyhow!("Unable to save plugin {}", output_name))?;
 
     trace!(" - Description: {}", description);
 
-    trace!("Updating last modified time on {}", name);
+    trace!("Updating last modified time on {}", output_name);
     filetime::set_file_mtime(merged_filepath, last_modified_time)
-        .with_context(|| anyhow!("Unable to set last modified date on plugin {}", name))?;
+        .with_context(|| anyhow!("Unable to set last modified date on plugin {}", output_name))?;
 
     Ok(())
 }

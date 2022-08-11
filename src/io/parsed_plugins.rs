@@ -1,3 +1,4 @@
+use crate::cli::SortOrder;
 use crate::io::meta_schema::{PluginMeta, VersionedPluginMeta};
 use anyhow::{anyhow, bail, Context, Result};
 use filetime::FileTime;
@@ -15,11 +16,11 @@ use std::sync::Arc;
 use tes3::esp::{Cell, Header, Landscape, LandscapeTexture, Plugin, TES3Object};
 
 /// Parse a [Plugin] named `plugin_name` from the `data_files` directory.
-fn parse_records(data_files: &str, plugin_name: &str) -> Result<Plugin> {
-    ParsedPlugins::check_data_files(data_files)
+fn parse_records(data_files: &Path, plugin_name: &str) -> Result<Plugin> {
+    ParsedPlugins::check_dir_exists(data_files)
         .with_context(|| anyhow!("Unable to find plugin {}", plugin_name))?;
 
-    let file_path: PathBuf = [data_files, plugin_name].iter().collect();
+    let file_path: PathBuf = [data_files, Path::new(plugin_name)].iter().collect();
 
     let mut plugin = Plugin::new();
     plugin
@@ -58,12 +59,20 @@ fn is_esm(path: &str) -> bool {
 }
 
 /// Sorts `plugin_list` by using the last modified date of the files in `data_files`.
-pub fn sort_plugins(data_files: &str, plugin_list: &mut [String]) -> Result<()> {
-    ParsedPlugins::check_data_files(data_files)
+pub fn sort_plugins(
+    data_files: &Path,
+    plugin_list: &mut [String],
+    sort_order: SortOrder,
+) -> Result<()> {
+    if matches!(sort_order, SortOrder::None) {
+        return Ok(());
+    }
+
+    ParsedPlugins::check_dir_exists(data_files)
         .with_context(|| anyhow!("Unable to sort load order with last modified date"))?;
 
     for plugin_name in plugin_list.iter() {
-        let file_path: PathBuf = [data_files, plugin_name].iter().collect();
+        let file_path: PathBuf = [data_files, Path::new(plugin_name)].iter().collect();
         file_path
             .metadata()
             .map(|metadata| FileTime::from_last_modification_time(&metadata))
@@ -73,7 +82,7 @@ pub fn sort_plugins(data_files: &str, plugin_list: &mut [String]) -> Result<()> 
     let order = |plugin_name: &str| {
         // Order by modified time, with ESMs given priority.
         let is_esm = is_esm(plugin_name);
-        let file_path: PathBuf = [data_files, plugin_name].iter().collect();
+        let file_path: PathBuf = [data_files, Path::new(plugin_name)].iter().collect();
         let last_modified_time = file_path
             .metadata()
             .map(|metadata| FileTime::from_last_modification_time(&metadata))
@@ -148,8 +157,8 @@ pub struct ParsedPlugins {
 
 /// Returns a [Vec] of plugin names by reading the `.ini` file located at
 /// `path`. Each plugin name is checked for existence in `data_files`.
-fn read_ini_file(data_files: &str, path: &Path) -> Result<Vec<String>> {
-    ParsedPlugins::check_data_files(data_files)
+fn read_ini_file(data_files: &Path, path: &Path) -> Result<Vec<String>> {
+    ParsedPlugins::check_dir_exists(data_files)
         .with_context(|| anyhow!("Unable to parse plugins from ini file"))?;
 
     let lines = read_lines(path).with_context(|| anyhow!("Unable to read Morrowind.ini"))?;
@@ -185,13 +194,17 @@ fn read_ini_file(data_files: &str, path: &Path) -> Result<Vec<String>> {
                         .trim_start_matches(QUOTE_CHARS)
                         .trim_end_matches(QUOTE_CHARS);
 
-                    let file_path: PathBuf = [data_files, plugin_name].iter().collect();
+                    let file_path: PathBuf = [data_files, Path::new(plugin_name)].iter().collect();
                     match file_path.try_exists() {
                         Ok(true) => all_plugins.push(plugin_name.to_string()),
                         Ok(false) => error!(
                             "{} {}",
                             format!("Plugin {}", plugin_name.bold()).bright_red(),
-                            format!("does not exist in `{}` directory", data_files).bright_red()
+                            format!(
+                                "does not exist in `{}` directory",
+                                data_files.to_string_lossy()
+                            )
+                            .bright_red()
                         ),
                         Err(e) => error!(
                             "{} {}",
@@ -210,13 +223,14 @@ fn read_ini_file(data_files: &str, path: &Path) -> Result<Vec<String>> {
 impl ParsedPlugins {
     /// Helper function for returning an `Err` if the `data_files` does not exist
     /// or is otherwise inaccessible.
-    pub fn check_data_files(data_files: &str) -> Result<()> {
-        let exists = Path::new(data_files)
+    pub fn check_dir_exists(dir: impl AsRef<Path>) -> Result<()> {
+        let path = dir.as_ref();
+        let exists = path
             .try_exists()
-            .with_context(|| anyhow!("Unable to find `{}` directory", data_files))?;
+            .with_context(|| anyhow!("Unable to find `{}` directory", path.to_string_lossy()))?;
 
         if !exists {
-            bail!("The `{}` directory does not exist", data_files);
+            bail!("The `{}` directory does not exist", path.to_string_lossy());
         }
 
         Ok(())
@@ -225,8 +239,12 @@ impl ParsedPlugins {
     /// Creates a new [ParsedPlugins] from the `data_files` directory.
     /// If `plugin_names` is [None], then the `.ini` file will be read from
     /// the parent directory above `data_files` and used for the list instead.
-    pub fn new(data_files: &str, plugin_names: Option<&[&str]>) -> Result<Self> {
-        ParsedPlugins::check_data_files(data_files)
+    pub fn new(
+        data_files: &Path,
+        plugin_names: Option<&[String]>,
+        sort_order: SortOrder,
+    ) -> Result<Self> {
+        ParsedPlugins::check_dir_exists(data_files)
             .with_context(|| anyhow!("Unable to parse plugins"))?;
 
         let mut all_plugins = plugin_names
@@ -244,7 +262,10 @@ impl ParsedPlugins {
                 trace!("Parsing Morrowind.ini for plugins");
 
                 let parent_directory = Path::new(data_files).parent().with_context(|| {
-                    anyhow!("Unable to find parent of `{}` directory", data_files)
+                    anyhow!(
+                        "Unable to find parent of `{}` directory",
+                        data_files.to_string_lossy()
+                    )
                 })?;
 
                 let file_path: PathBuf = [parent_directory, Path::new("Morrowind.ini")]
@@ -263,8 +284,7 @@ impl ParsedPlugins {
             })
             .with_context(|| anyhow!("Unable to parse plugins"))?;
 
-        // TODO(dvd): #feature Control this via config file.
-        sort_plugins(data_files, &mut all_plugins)
+        sort_plugins(data_files, &mut all_plugins, sort_order)
             .with_context(|| anyhow!("Unknown load order for plugins"))?;
 
         let mut masters = Vec::new();
@@ -274,7 +294,8 @@ impl ParsedPlugins {
             match parse_records(data_files, &plugin_name) {
                 Ok(records) => {
                     let meta_name = meta_name(&plugin_name);
-                    let meta_file_path: PathBuf = [data_files, &meta_name].iter().collect();
+                    let meta_file_path: PathBuf =
+                        [data_files, Path::new(&meta_name)].iter().collect();
 
                     let data = fs::read_to_string(meta_file_path)
                         .with_context(|| anyhow!("Failed to read meta file."))

@@ -3,11 +3,15 @@ name = "merged_lands"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.64.0"
+build = "build.rs"
+
+[build-dependencies]
+# Build metadata.
+shadow-rs = "0.16.1"
 
 [dependencies]
-# <uncategorized>
-clap = "3.2.16"
-argfile = "0.1.4"
+# Command line interface.
+clap = { version = "3.2.16", features = ["derive"] }
 wild = "2.0.4"
 shadow-rs = "0.16.1"
 

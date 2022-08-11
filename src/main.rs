@@ -6,11 +6,6 @@
 #![feature(map_many_mut)]
 #![feature(const_for)]
 
-mod io;
-mod land;
-mod merge;
-mod repair;
-
 use crate::io::meta_schema::MetaType;
 use crate::io::parsed_plugins::{ParsedPlugin, ParsedPlugins};
 use crate::io::save_to_image::save_landmass_images;
@@ -25,8 +20,7 @@ use crate::merge::relative_terrain_map::{IsModified, RelativeTerrainMap};
 use crate::repair::cleaning::{clean_known_textures, clean_landmass_diff};
 use crate::repair::debugging::add_debug_vertex_colors_to_landmass;
 use crate::repair::seam_detection::repair_landmass_seams;
-use anyhow::Result;
-use clap::Command;
+use anyhow::{anyhow, Context, Result};
 use hashbrown::HashMap;
 use itertools::Itertools;
 use log::{debug, error, info, trace, warn};
@@ -43,6 +37,11 @@ use std::process::exit;
 use std::sync::Arc;
 use std::time::Instant;
 use tes3::esp::{Landscape, LandscapeFlags, LandscapeTexture, ObjectFlags};
+
+mod io;
+mod land;
+mod merge;
+mod repair;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -94,21 +93,158 @@ impl LandmassDiff {
     }
 }
 
+mod cli {
+    use crate::ParsedPlugins;
+    use anyhow::{anyhow, Context, Result};
+    use clap::{AppSettings, ArgEnum, Parser};
+    use log::LevelFilter;
+    use shadow_rs::shadow;
+    use std::path::PathBuf;
+
+    shadow!(build);
+
+    #[derive(Copy, PartialEq, Eq, Debug, Hash, Clone, ArgEnum)]
+    pub enum CliLevelFilter {
+        Off,
+        Error,
+        Warn,
+        Info,
+        Debug,
+        Trace,
+    }
+
+    #[derive(Copy, PartialEq, Eq, Debug, Hash, Clone, ArgEnum)]
+    pub enum SortOrder {
+        Default,
+        None,
+    }
+
+    impl From<CliLevelFilter> for LevelFilter {
+        fn from(v: CliLevelFilter) -> Self {
+            match v {
+                CliLevelFilter::Off => LevelFilter::Off,
+                CliLevelFilter::Error => LevelFilter::Error,
+                CliLevelFilter::Warn => LevelFilter::Warn,
+                CliLevelFilter::Info => LevelFilter::Info,
+                CliLevelFilter::Debug => LevelFilter::Debug,
+                CliLevelFilter::Trace => LevelFilter::Trace,
+            }
+        }
+    }
+
+    #[derive(Parser, Debug)]
+    #[clap(author = "DVD")]
+    #[clap(about = "Merges lands.")]
+    #[clap(version = build::CLAP_LONG_VERSION)]
+    #[clap(long_about = None)] // Read from `Cargo.toml`
+    #[clap(global_setting(AppSettings::DeriveDisplayOrder))]
+    pub struct Cli {
+        #[clap(long, value_parser, default_value_t = String::from("."))]
+        /// The directory containing the `Conflicts` folder.
+        /// This is also where the `log_file` will be stored.
+        merged_lands_dir: String,
+
+        #[clap(long, value_parser, default_value_t = String::from("Data Files"))]
+        /// The absolute or relative path to the `Data Files` folder containing plugins.
+        data_files_dir: String,
+
+        #[clap(long, value_parser, default_value_t = String::from("Merged Lands.esp"))]
+        /// The name of the output file. This will be written to `output_file_dir`.
+        pub output_file: String,
+
+        #[clap(long, value_parser)]
+        /// The directory for the `output_file`.
+        /// If not provided, this is the same as `data_files_dir`.
+        output_file_dir: Option<String>,
+
+        #[clap(value_parser, required = false)]
+        /// An ordered list of plugins.
+        /// If this is not provided, the tool will look for an `.ini` file
+        /// in the directory above the `Data Files` and parse that for plugins.
+        input_file_names: Vec<String>,
+
+        #[clap(long, arg_enum, value_parser, default_value_t = SortOrder::Default)]
+        /// The method of sorting plugins.
+        /// `none` is only valid if `input_file_names` are provided.
+        pub sort_order: SortOrder,
+
+        #[clap(long, value_parser, default_value_t = String::from("merged_lands.log"))]
+        /// The name of the log file. This will be written to `merged_lands_dir`.
+        pub log_file: String,
+
+        #[clap(long, arg_enum, value_parser, default_value_t = CliLevelFilter::Debug)]
+        /// The level of logging.
+        /// If set to Off, no log will will be written.
+        pub log_level: CliLevelFilter,
+
+        #[clap(long, value_parser, default_value_t = 8)]
+        /// The size of the application's stack in MB.
+        stack_size_mb: u8,
+
+        #[clap(long, value_parser)]
+        /// The application will color the LAND vertex colors to show conflicts.
+        pub add_debug_vertex_colors: bool,
+
+        #[clap(long, value_parser)]
+        /// The application will wait for the user to hit the ENTER key before closing.
+        pub wait_for_exit: bool,
+    }
+
+    impl Cli {
+        pub fn read_args() -> Cli {
+            let args = wild::args();
+            Cli::parse_from(args)
+        }
+
+        pub fn plugins(&self) -> Option<&[String]> {
+            (!self.input_file_names.is_empty()).then_some(&self.input_file_names)
+        }
+
+        pub fn should_write_log_file(&self) -> bool {
+            self.log_level != CliLevelFilter::Off
+        }
+
+        pub fn merged_lands_dir(&self) -> Result<PathBuf> {
+            let dir = &self.merged_lands_dir;
+            Ok(PathBuf::from(dir))
+        }
+
+        pub fn data_files_dir(&self) -> Result<PathBuf> {
+            let dir = &self.data_files_dir;
+            ParsedPlugins::check_dir_exists(dir)
+                .with_context(|| anyhow!("Invalid `Data Files` directory"))?;
+            Ok(PathBuf::from(dir))
+        }
+
+        pub fn output_file_dir(&self) -> Result<PathBuf> {
+            let dir = self
+                .output_file_dir
+                .as_ref()
+                .unwrap_or(&self.data_files_dir);
+            ParsedPlugins::check_dir_exists(dir)
+                .with_context(|| anyhow!("Invalid output file directory"))?;
+            Ok(PathBuf::from(dir))
+        }
+
+        pub fn stack_size(&self) -> usize {
+            (self.stack_size_mb as usize) * 1024 * 1024
+        }
+    }
+}
+
+use cli::Cli;
+
 /// Handles CLI arguments, log initialization, and the creation of a worker thread
 /// for running the actual [merge_all] function.
 fn main() -> Result<()> {
-    Command::new("merged_lands").get_matches();
+    let cli = Cli::read_args();
+    let wait_for_exit = cli.wait_for_exit;
 
-    let merged_lands_dir = PathBuf::from("Merged Lands");
-    let log_file_name = "merged_lands.log";
-
-    let has_log_file = init_log(&merged_lands_dir, Some(log_file_name));
-
-    const STACK_SIZE: usize = 8 * 1024 * 1024;
+    init_log(&cli);
 
     let work_thread = std::thread::Builder::new()
-        .stack_size(STACK_SIZE)
-        .spawn(|| merge_all(merged_lands_dir))
+        .stack_size(cli.stack_size())
+        .spawn(move || merge_all(&cli))
         .expect("unable to create worker thread");
 
     if let Err(e) = work_thread.join().expect("unable to join worker thread") {
@@ -117,16 +253,16 @@ fn main() -> Result<()> {
             format!("An unexpected error occurred: {:?}", e.bold()).bright_red()
         );
 
-        wait_for_user_exit(has_log_file);
+        wait_for_user_exit(wait_for_exit);
         exit(1);
     }
 
-    wait_for_user_exit(has_log_file);
+    wait_for_user_exit(wait_for_exit);
     Ok(())
 }
 
-fn wait_for_user_exit(has_log_file: bool) {
-    if has_log_file {
+fn wait_for_user_exit(wait_for_exit: bool) {
+    if !wait_for_exit {
         return;
     }
 
@@ -137,12 +273,10 @@ fn wait_for_user_exit(has_log_file: bool) {
 }
 
 /// The main function.
-fn merge_all(merged_lands_dir: PathBuf) -> Result<()> {
+fn merge_all(cli: &Cli) -> Result<()> {
     let start = Instant::now();
 
     let mut known_textures = KnownTextures::new();
-
-    // TODO(dvd): #mvp Read CLI args, or config args.
 
     // STEP 1:
     // For each Plugin, ordered by last modified:
@@ -163,11 +297,9 @@ fn merge_all(merged_lands_dir: PathBuf) -> Result<()> {
     // optional `.mergedlands.toml` if it existed. The Arc<...> is copied into each LandscapeDiff.
     info!(":: Parsing Plugins ::");
 
-    let data_files = "Data Files";
-    let file_name = "Merged Lands.esp";
-    let plugin_names = None;
-
-    let parsed_plugins = ParsedPlugins::new(data_files, plugin_names)?;
+    let data_files = cli.data_files_dir()?;
+    let plugin_names = cli.plugins();
+    let parsed_plugins = ParsedPlugins::new(&data_files, plugin_names, cli.sort_order)?;
 
     let reference_landmass = Arc::new(create_tes3_landmass(
         "ReferenceLandmass.esp",
@@ -235,12 +367,12 @@ fn merge_all(merged_lands_dir: PathBuf) -> Result<()> {
     //  - Produce images of the final merge results.
     info!(":: Summarizing Conflicts ::");
 
+    let merged_lands_dir = cli.merged_lands_dir()?;
     for modded_landmass in modded_landmasses.iter() {
         save_landmass_images(&merged_lands_dir, &merged_lands, modded_landmass);
     }
 
-    // TODO(dvd): #mvp Read from config.
-    let debug_vertex_colors = true;
+    let debug_vertex_colors = cli.add_debug_vertex_colors;
     if debug_vertex_colors {
         warn!(":: Adding Debug Colors ::");
         for modded_landmass in modded_landmasses.iter() {
@@ -282,7 +414,18 @@ fn merge_all(merged_lands_dir: PathBuf) -> Result<()> {
     info!(":: Saving ::");
 
     let cells = merge_cells(&parsed_plugins);
-    save_plugin(data_files, file_name, &landmass, &known_textures, &cells)?;
+
+    let output_file_dir = cli.output_file_dir()?;
+    let file_name = &cli.output_file;
+    save_plugin(
+        &data_files,
+        &output_file_dir,
+        file_name,
+        cli.sort_order,
+        &landmass,
+        &known_textures,
+        &cells,
+    )?;
 
     info!(":: Finished ::");
     info!("Time Elapsed: {:?}", Instant::now().duration_since(start));
@@ -292,7 +435,7 @@ fn merge_all(merged_lands_dir: PathBuf) -> Result<()> {
 
 /// Initializes a [TermLogger] and [WriteLogger]. If the [WriteLogger] cannot be initialized,
 /// then the program will continue with only the [TermLogger].
-fn init_log(merged_lands_dir: &PathBuf, log_file_name: Option<&str>) -> bool {
+fn init_log(cli: &Cli) -> bool {
     let config = ConfigBuilder::default()
         .set_time_level(LevelFilter::Off)
         .set_thread_level(LevelFilter::Off)
@@ -301,16 +444,30 @@ fn init_log(merged_lands_dir: &PathBuf, log_file_name: Option<&str>) -> bool {
         .set_level_padding(LevelPadding::Right)
         .build();
 
-    let log_file_path: Option<PathBuf> =
-        log_file_name.map(|name| [merged_lands_dir, &PathBuf::from(name)].iter().collect());
+    let get_log_file_path = || {
+        let merged_lands_dir = cli.merged_lands_dir();
+        let log_file_name = &cli.log_file;
+        let log_file_path: Result<PathBuf> = match merged_lands_dir {
+            Ok(path) => Ok([path, PathBuf::from(log_file_name)].iter().collect()),
+            Err(e) => Err(e),
+        };
+        log_file_path
+    };
 
-    let write_logger = log_file_path.as_ref().map(|file_path| {
-        File::create(file_path)
-            .map(|file| WriteLogger::new(LevelFilter::Trace, config.clone(), file))
+    let write_logger = cli.should_write_log_file().then(|| {
+        let log_file_path = get_log_file_path()?;
+        File::create(&log_file_path)
+            .map(|file| WriteLogger::new(cli.log_level.into(), config.clone(), file))
+            .with_context(|| {
+                anyhow!(
+                    "Unable to create log file at {}",
+                    log_file_path.to_string_lossy()
+                )
+            })
     });
 
     let term_logger = TermLogger::new(
-        LevelFilter::Trace,
+        LevelFilter::Debug,
         config,
         TerminalMode::Mixed,
         ColorChoice::Auto,
@@ -321,7 +478,7 @@ fn init_log(merged_lands_dir: &PathBuf, log_file_name: Option<&str>) -> bool {
             CombinedLogger::init(vec![term_logger, write_logger]).expect("safe");
             trace!(
                 "Log file will be saved to {}",
-                log_file_path.expect("safe").to_string_lossy()
+                get_log_file_path().expect("safe").to_string_lossy()
             );
 
             true
@@ -332,7 +489,10 @@ fn init_log(merged_lands_dir: &PathBuf, log_file_name: Option<&str>) -> bool {
                 "{} {}",
                 format!(
                     "Failed to create log file at {}",
-                    log_file_path.expect("safe").to_string_lossy().bold()
+                    get_log_file_path()
+                        .unwrap_or_else(|_| PathBuf::from(&cli.log_file))
+                        .to_string_lossy()
+                        .bold()
                 )
                 .bright_red(),
                 format!("due to: {:?}", e.bold()).bright_red()
