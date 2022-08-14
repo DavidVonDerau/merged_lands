@@ -1,6 +1,6 @@
 [package]
 name = "merged_lands"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.64.0"
 build = "build.rs"

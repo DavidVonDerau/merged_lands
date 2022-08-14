@@ -58,6 +58,7 @@ pub fn clean_known_textures(
     // Reserve extra texture index for the default 0th texture.
 
     let mut used_ids = vec![false; known_textures.len() + 1];
+    used_ids[0] = true; // Assume the default texture is in use.
     for (_, land) in landmass.sorted() {
         let Some(texture_indices) = land.texture_indices.as_ref() else {
             continue;
