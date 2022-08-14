@@ -52,10 +52,17 @@ fn read_lines(filename: &Path) -> Result<Lines<BufReader<File>>> {
 }
 
 /// Returns `true` if `path` ends with `.esm`, ignoring case.
-fn is_esm(path: &str) -> bool {
-    Path::new(path)
+pub fn is_esm(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
         .extension()
         .map_or(false, |ext| ext.eq_ignore_ascii_case("esm"))
+}
+
+/// Returns `true` if `path` ends with `.esp`, ignoring case.
+pub fn is_esp(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .extension()
+        .map_or(false, |ext| ext.eq_ignore_ascii_case("esp"))
 }
 
 /// Sorts `plugin_list` by using the last modified date of the files in `data_files`.

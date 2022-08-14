@@ -388,8 +388,8 @@ fn merge_all(cli: &Cli) -> Result<()> {
     // [IMPLEMENTATION NOTE] This is an optimization to make MergedLands.esp friendlier.
     info!(":: Cleaning Land ::");
 
-    clean_landmass_diff(&mut merged_lands);
-
+    clean_landmass_diff(&mut merged_lands, &modded_landmasses);
+    
     // ---------------------------------------------------------------------------------------------
     // [IMPLEMENTATION NOTE] Below this line, the merged landmass cannot be diff'd against plugins.
     // ---------------------------------------------------------------------------------------------

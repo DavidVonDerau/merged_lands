@@ -1,25 +1,119 @@
-use crate::io::parsed_plugins::{ParsedPlugin, ParsedPlugins};
+use crate::io::parsed_plugins::{is_esp, ParsedPlugin, ParsedPlugins};
 use crate::land::grid_access::SquareGridIterator;
+use crate::land::landscape_diff::LandscapeDiff;
 use crate::land::textures::{KnownTextures, RemappedTextures};
+use crate::merge::conflict::{ConflictResolver, ConflictType};
+use crate::merge::relative_terrain_map::RelativeTerrainMap;
+use crate::merge::relative_to::RelativeTo;
 use crate::repair::seam_detection::repair_landmass_seams;
 use crate::LandmassDiff;
-use log::trace;
+use log::debug;
+use std::collections::HashMap;
+use std::default::default;
 use std::sync::Arc;
 use tes3::esp::LandscapeTexture;
 
-/// Remove any unmodified [crate::LandscapeDiff] from the [LandmassDiff].
-pub fn clean_landmass_diff(landmass: &mut LandmassDiff) {
-    let mut unmodified = Vec::new();
+pub fn has_difference<U: RelativeTo + ConflictResolver, const T: usize>(
+    lhs: Option<&RelativeTerrainMap<U, T>>,
+    rhs: Option<&RelativeTerrainMap<U, T>>,
+) -> bool {
+    let Some(lhs) = lhs else {
+        return false;
+    };
 
+    let Some(rhs) = rhs else {
+        return false;
+    };
+
+    let params = default();
+
+    for coords in lhs.iter_grid() {
+        let actual = lhs.get_value(coords);
+        let expected = rhs.get_value(coords);
+        match actual.average(expected, &params) {
+            None => {}
+            Some(ConflictType::Minor(_)) => {
+                return true;
+            }
+            Some(ConflictType::Major(_)) => {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn has_any_difference(reference: &LandscapeDiff, plugin: &LandscapeDiff) -> bool {
+    has_difference(reference.height_map.as_ref(), plugin.height_map.as_ref())
+        || has_difference(
+            reference.vertex_normals.as_ref(),
+            plugin.vertex_normals.as_ref(),
+        )
+        || has_difference(
+            reference.world_map_data.as_ref(),
+            plugin.world_map_data.as_ref(),
+        )
+        || has_difference(
+            reference.vertex_colors.as_ref(),
+            plugin.vertex_colors.as_ref(),
+        )
+        || has_difference(
+            reference.texture_indices.as_ref(),
+            plugin.texture_indices.as_ref(),
+        )
+}
+
+/// Remove any unmodified [crate::LandscapeDiff] from the [LandmassDiff].
+pub fn clean_landmass_diff(landmass: &mut LandmassDiff, modded_landmasses: &[LandmassDiff]) {
     assert_eq!(repair_landmass_seams(landmass), 0);
+
+    let mut modded_landmasses_map = HashMap::with_capacity(modded_landmasses.len());
+    for modded_landmass in modded_landmasses.iter() {
+        modded_landmasses_map.insert(modded_landmass.plugin.name.clone(), modded_landmass);
+    }
+
+    let mut unmodified = Vec::new();
+    let mut num_unmodified_from_reference = 0;
+    let mut num_unmodified_from_plugin = 0;
 
     for (coords, land) in landmass.land.iter_mut() {
         if !land.is_modified() {
             unmodified.push(*coords);
+            num_unmodified_from_reference += 1;
+            continue;
+        };
+
+        let num_esps = land
+            .plugins
+            .iter()
+            .filter(|plugin| is_esp(&plugin.0.name))
+            .count();
+
+        if num_esps != 1 {
+            continue;
+        }
+
+        let plugin = land.plugins.last().expect("safe").0.clone();
+        assert!(is_esp(&plugin.name));
+
+        let modded_landmass = modded_landmasses_map.get(&plugin.name).expect("safe");
+        let modded_landmass_land = modded_landmass.land.get(coords).expect("safe");
+        if !has_any_difference(land, modded_landmass_land) {
+            unmodified.push(*coords);
+            num_unmodified_from_plugin += 1;
         }
     }
 
-    trace!("Removing {} unmodified LAND records", unmodified.len());
+    debug!(
+        "Removing {} LAND records unmodified from reference",
+        num_unmodified_from_reference
+    );
+
+    debug!(
+        "Removing {} LAND records unmodified from plugins",
+        num_unmodified_from_plugin
+    );
 
     for coords in unmodified.drain(..) {
         landmass.land.remove(&coords);
@@ -75,8 +169,8 @@ pub fn clean_known_textures(
     let remapped_textures = RemappedTextures::from(&used_ids);
     let num_removed_ids = known_textures.remove_unused(&remapped_textures);
 
-    trace!("Removing {} unused LTEX records", num_removed_ids);
-    trace!("Remapping {} LTEX records", known_textures.len());
+    debug!("Removing {} unused LTEX records", num_removed_ids);
+    debug!("Remapping {} LTEX records", known_textures.len());
 
     remapped_textures
 }
