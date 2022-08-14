@@ -100,6 +100,8 @@ impl RemappedTextures {
 
     /// Creates a new [RemappedTextures] from the `used_ids`.
     pub fn from(used_ids: &[bool]) -> Self {
+        assert!(used_ids[0]);
+
         let mut new = Self::with_capacity(used_ids.len());
 
         for (new_id, (idx, _)) in used_ids
@@ -234,6 +236,7 @@ impl KnownTextures {
         remapped_textures: &mut RemappedTextures,
     ) {
         let (old_id, new_id) = self.add_texture(plugin, texture);
+        assert_ne!(IndexVTEX::from(new_id).0, 0);
         if remapped_textures
             .inner
             .insert(old_id.into(), new_id.into())
