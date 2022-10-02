@@ -182,6 +182,10 @@ mod cli {
         stack_size_mb: u8,
 
         #[clap(long, value_parser)]
+        /// The application will remove all CELL records when this flag is provided.
+        pub remove_cell_records: bool,
+
+        #[clap(long, value_parser)]
         /// The application will color the LAND vertex colors to show conflicts.
         pub add_debug_vertex_colors: bool,
 
@@ -389,7 +393,7 @@ fn merge_all(cli: &Cli) -> Result<()> {
     info!(":: Cleaning Land ::");
 
     clean_landmass_diff(&mut merged_lands, &modded_landmasses);
-    
+
     // ---------------------------------------------------------------------------------------------
     // [IMPLEMENTATION NOTE] Below this line, the merged landmass cannot be diff'd against plugins.
     // ---------------------------------------------------------------------------------------------
@@ -417,6 +421,7 @@ fn merge_all(cli: &Cli) -> Result<()> {
 
     let output_file_dir = cli.output_file_dir()?;
     let file_name = &cli.output_file;
+    let include_cell_records = !cli.remove_cell_records;
     save_plugin(
         &data_files,
         &output_file_dir,
@@ -424,7 +429,7 @@ fn merge_all(cli: &Cli) -> Result<()> {
         cli.sort_order,
         &landmass,
         &known_textures,
-        &cells,
+        include_cell_records.then_some(&cells),
     )?;
 
     info!(":: Finished ::");
