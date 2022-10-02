@@ -134,7 +134,7 @@ pub fn save_plugin(
     sort_order: SortOrder,
     landmass: &Landmass,
     known_textures: &KnownTextures,
-    cells: &HashMap<Vec2<i32>, ModifiedCell>,
+    cells: Option<&HashMap<Vec2<i32>, ModifiedCell>>,
 ) -> Result<()> {
     ParsedPlugins::check_dir_exists(output_file_dir)
         .with_context(|| anyhow!("Unable to save file {}", output_name))?;
@@ -159,28 +159,30 @@ pub fn save_plugin(
             add_dependency(plugin);
         }
 
-        // Add plugins that modified cells.
-        for (coords, _) in landmass.sorted() {
-            let cell = cells.get(coords).with_context(|| {
-                anyhow!(
-                    "Could not find CELL record for LAND with coordinates {:?}",
-                    coords
-                )
-            })?;
+        if let Some(cells) = cells {
+            // Add plugins that modified cells.
+            for (coords, _) in landmass.sorted() {
+                let cell = cells.get(coords).with_context(|| {
+                    anyhow!(
+                        "Could not find CELL record for LAND with coordinates {:?}",
+                        coords
+                    )
+                })?;
 
-            let plugin = cell.plugins.last().expect("safe");
-            if add_dependency(plugin) {
-                trace!(
-                    "({:>4}, {:>4})   | {:<50} | {}",
-                    coords.x,
-                    coords.y,
-                    plugin.name,
-                    if cell.inner.id.is_empty() {
-                        cell.inner.region.as_deref().unwrap_or("")
-                    } else {
-                        cell.inner.id.as_str()
-                    }
-                );
+                let plugin = cell.plugins.last().expect("safe");
+                if add_dependency(plugin) {
+                    trace!(
+                        "({:>4}, {:>4})   | {:<50} | {}",
+                        coords.x,
+                        coords.y,
+                        plugin.name,
+                        if cell.inner.id.is_empty() {
+                            cell.inner.region.as_deref().unwrap_or("")
+                        } else {
+                            cell.inner.id.as_str()
+                        }
+                    );
+                }
             }
         }
 
@@ -245,10 +247,18 @@ pub fn save_plugin(
         ));
     }
 
-    debug!("Saving {} CELL and LAND records", landmass.land.len());
+    if cells.is_some() {
+        debug!("Saving {} CELL and LAND records", landmass.land.len());
+    } else {
+        debug!("Saving {} LAND records", landmass.land.len());
+    }
+
     for (coords, land) in landmass.sorted() {
-        let cell = cells.get(coords).expect("safe");
-        plugin.objects.push(TES3Object::Cell(cell.inner.clone()));
+        if let Some(cells) = cells {
+            let cell = cells.get(coords).expect("safe");
+            plugin.objects.push(TES3Object::Cell(cell.inner.clone()));
+        }
+
         plugin.objects.push(TES3Object::Landscape(land.clone()));
     }
 
