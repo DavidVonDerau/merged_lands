@@ -1,4 +1,5 @@
 use crate::land::grid_access::Index2D;
+use crate::land::landscape_diff::LandscapeDiff;
 use crate::land::terrain_map::Vec2;
 use crate::merge::relative_terrain_map::RelativeTerrainMap;
 use crate::LandmassDiff;
@@ -319,6 +320,17 @@ pub fn repair_landmass_seams(merged: &mut LandmassDiff) -> usize {
                 seam.3,
                 seam.4
             );
+        }
+    }
+
+    for land in merged.land.values_mut() {
+        if let Some(vertex_normals) = land.vertex_normals.as_ref() {
+            land.vertex_normals = Some(LandscapeDiff::apply_mask(
+                vertex_normals,
+                land.height_map
+                    .as_ref()
+                    .map(RelativeTerrainMap::differences),
+            ));
         }
     }
 
