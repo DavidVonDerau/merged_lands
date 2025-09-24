@@ -24,7 +24,6 @@ use anyhow::{anyhow, Context, Result};
 use hashbrown::HashMap;
 use itertools::Itertools;
 use log::{debug, error, info, trace, warn};
-use mimalloc::MiMalloc;
 use owo_colors::OwoColorize;
 use simplelog::{
     ColorChoice, CombinedLogger, ConfigBuilder, LevelFilter, LevelPadding, TermLogger,
@@ -42,9 +41,6 @@ mod io;
 mod land;
 mod merge;
 mod repair;
-
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
 
 /// A [Landmass] represents a collection of [Landscape] and the associated [ParsedPlugin].
 pub struct Landmass {
